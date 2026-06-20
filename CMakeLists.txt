@@ -15,6 +15,7 @@ include_directories(include)
 # Define our dump utility executable
 add_executable(varm src/main.c)
 add_executable(varm-dump src/varm-dump.c)
+add_executable(varm src/main.c varm-gxm/src/hle/gxm.c)
 
 # Set the output directory for the compiled binary to our local bin/ folder
 set_target_properties(varm-dump PROPERTIES
