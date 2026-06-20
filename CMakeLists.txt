@@ -3,17 +3,15 @@ project(varm C)
 
 set(CMAKE_C_STANDARD 11)
 
-# Tell CMake where your header files live
+# Include directories for both main and submodule subdirectories
 include_directories(include)
+include_directories(varm-gxm/include)
 
-# ONE single definition for the varm binary containing all your source assets
 add_executable(varm
     src/main.c
     src/hle_kernel.c
     varm-gxm/src/hle/gxm.c
 )
 
-# Keep your standalone dumper utility separate
-add_executable(varm-dump
-    src/varm-dump.c
-)
+# Crucial: This links the system loader library so dlopen works flawlessly on ARM64 Linux
+target_link_libraries(varm ${CMAKE_DL_LIBS})

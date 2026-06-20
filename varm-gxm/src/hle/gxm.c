@@ -1,60 +1,73 @@
 #include <stdio.h>
-#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <dlfcn.h> // Dynamic linking to pull stock muOS shared libs
+#include "varm_gxm_backend.h"
 
-// Dummy typedefs to match Vita SDK types without including full headers yet
-typedef int32_t SceGxmErrorCode;
-typedef void* SceGxmContext;
-typedef const void* SceGxmInitializeParams;
-typedef const void* SceGxmContextParams;
-typedef void* SceGxmShaderPatcher;
-typedef const void* SceGxmShaderPatcherParams;
-
-#define SCE_OK 0
-
-/* * NID: 0x1AB569A4 (Example NID for SceGxmInitialize)
- * This is the first graphics call any Vita game makes to spin up the GPU.
- */
-SceGxmErrorCode varm_sceGxmInitialize(const SceGxmInitializeParams *params) {
-    printf("[HLE GXM] sceGxmInitialize called! Initializing virtual PowerVR pipeline...\n");
-    // Eventually, we will initialize our native OpenGL ES / Vulkan context here
-    return SCE_OK;
-}
-
-/* * NID: 0x42962136
- * Allocates a rendering context for handling draw commands.
- */
-SceGxmErrorCode varm_sceGxmCreateContext(const SceGxmContextParams *params, SceGxmContext *context) {
-    printf("[HLE GXM] sceGxmCreateContext called. Creating rendering context.\n");
-    if (context) {
-        *context = (void*)0x12345678; // Return a dummy handle for now
+// Core 1: Stock OpenGL ES implementation routing
+static int gles_init_display(void) {
+    printf("[GXM-GLES] Initializing stock muOS EGL/GLES2 context...\n");
+    // Dynamically check for stock Mali driver library existence
+    void* gles_lib = dlopen("libGLESv2.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!gles_lib) {
+        printf("[GXM-GLES-ERROR] Failed to tap into system libGLESv2.so!\n");
+        return -1;
     }
-    return SCE_OK;
+    printf("[GXM-GLES] Stock GLES Driver hooked successfully!\n");
+    return 0;
 }
 
-/* * NID: 0x987A6543
- * The Shader Patcher is responsible for registering and compiling GXP shaders.
- * This is where we will hook into Vita3K's shader recompiler source code later!
- */
-SceGxmErrorCode varm_sceGxmShaderPatcherCreate(const SceGxmShaderPatcherParams *params, SceGxmShaderPatcher *patcher) {
-    printf("[HLE GXM] sceGxmShaderPatcherCreate called! Intercepting shader compilation engine.\n");
-    if (patcher) {
-        *patcher = (void*)0x87654321; // Return dummy shader patcher handle
+static int gles_allocate_surface(GxmSurfaceContext *surface) {
+    printf("[GXM-GLES] Mapping GXM surface (0x%08X) to GLES texture generation...\n", surface->vaddr);
+    return 0;
+}
+
+static int gles_submit_cmd(uint32_t cmd_vaddr, uint32_t size) {
+    // This will parse the native Vita GXM drawing commands into standard GLES draw calls
+    return 0;
+}
+
+// Core 2: Stock Vulkan implementation routing
+static int vulkan_init_display(void) {
+    printf("[GXM-VULKAN] Probing system for stock Vulkan loader...\n");
+    void* vulkan_lib = dlopen("libvulkan.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!vulkan_lib) {
+        printf("[GXM-VULKAN-ERROR] Vulkan driver not present or unsupported on this muOS kernel!\n");
+        return -1;
     }
-    return SCE_OK;
+    printf("[GXM-VULKAN] Stock Vulkan Loader linked safely!\n");
+    return 0;
 }
 
-/* * NID: 0xA1B2C3D4
- * Called every frame when the game wants to clear the screen and start drawing geometry.
- */
-void varm_sceGxmBeginScene(SceGxmContext context, unsigned int flags, void *render_target, void *depth_stencil, void *vis_ctx) {
-    printf("[HLE GXM] sceGxmBeginScene triggered. Clearing frame buffers...\n");
-    // This will map directly to glViewport / glClear or Vulkan render pass begins
+static int vulkan_allocate_surface(GxmSurfaceContext *surface) {
+    printf("[GXM-VULKAN] Creating VkImage view wrapper for Vaddr: 0x%08X\n", surface->vaddr);
+    return 0;
 }
 
-/* * NID: 0xE5F6A7B8
- * Called when the game is done submitting vertex/index arrays for the frame.
- */
-void varm_sceGxmEndScene(SceGxmContext context, void *vis_ctx, void *sync_object) {
-    // printf("[HLE GXM] sceGxmEndScene triggered. Swapping native buffers.\n");
-    // Commented out or throttled so it doesn't spam your terminal log 60 times a second!
+static int vulkan_submit_cmd(uint32_t cmd_vaddr, uint32_t size) {
+    // Maps GXM command chains into a native VkCommandBuffer record context
+    return 0;
+}
+
+// Global Core Distributor Selector
+int varm_gxm_init_renderer(V_RenderCoreType core_type, V_GxmRendererInterface *interface) {
+    if (!interface) return -1;
+
+    if (core_type == VARM_RENDER_CORE_GLES) {
+        printf("[GXM-BRIDGE] Switched execution context to: OPENGL ES CORE\n");
+        interface->init_display           = gles_init_display;
+        interface->allocate_surface       = gles_allocate_surface;
+        interface->submit_command_buffer  = gles_submit_cmd;
+        return 0;
+    }
+    else if (core_type == VARM_RENDER_CORE_VULKAN) {
+        printf("[GXM-BRIDGE] Switched execution context to: VULKAN CORE\n");
+        interface->init_display           = vulkan_init_display;
+        interface->allocate_surface       = vulkan_allocate_surface;
+        interface->submit_command_buffer  = vulkan_submit_cmd;
+        return 0;
+    }
+
+    printf("[GXM-BRIDGE-ERROR] Unknown render core selection type requested!\n");
+    return -1;
 }
