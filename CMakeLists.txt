@@ -1,23 +1,19 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.10)
 project(varm C)
 
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Configure compiler flags
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    add_compile_options(-Wall -Wextra -O2)
-endif()
-
-# Include directories
+# Tell CMake where your header files live
 include_directories(include)
 
-# Define our dump utility executable
-add_executable(varm src/main.c)
-add_executable(varm-dump src/varm-dump.c)
-add_executable(varm src/main.c varm-gxm/src/hle/gxm.c)
+# ONE single definition for the varm binary containing all your source assets
+add_executable(varm
+    src/main.c
+    src/hle_kernel.c
+    varm-gxm/src/hle/gxm.c
+)
 
-# Set the output directory for the compiled binary to our local bin/ folder
-set_target_properties(varm-dump PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+# Keep your standalone dumper utility separate
+add_executable(varm-dump
+    src/varm-dump.c
 )
