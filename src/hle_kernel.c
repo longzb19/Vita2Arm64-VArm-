@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "varm_bridge.h"
 #include <stdint.h>
 #include "../include/varm_bridge.h"
 
