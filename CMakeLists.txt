@@ -7,9 +7,11 @@ set(CMAKE_C_STANDARD 11)
 include_directories(include)
 include_directories(varm-gxm/include)
 
+# Look for your executable target configuration and add the new file:
 add_executable(varm
     src/main.c
     src/hle_kernel.c
+    src/varm_menu.c             # <-- ADD THIS LINE HERE
     varm-gxm/src/hle/gxm.c
 )
 
