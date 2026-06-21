@@ -112,11 +112,17 @@ int main(int argc, char** argv) {
             if (final_file_offset + sizeof(Varm_SceModuleInfo) <= total_file_size) {
                 fseek(file, final_file_offset, SEEK_SET);
                 if (fread(&mod_info_struct, 1, sizeof(Varm_SceModuleInfo), file) == sizeof(Varm_SceModuleInfo)) {
-                    successfully_read = 1;
+                    // Check if the first character is text to confirm if the binary block is encrypted
+                    if (mod_info_struct.module_name[0] >= 32 && mod_info_struct.module_name[0] <= 126) {
+                        successfully_read = 1;
+                    } else {
+                        // Keep successfully_read at 0 if it's retail encrypted data
+                        successfully_read = 0;
+                    }
                 }
             }
         }
-    }
+    } // Loop closes cleanly here! Now everything below runs exactly once.
 
     uint32_t native_entrypoint = VITA_USER_BASE_VADDR + elf_hdr.e_entry;
     printf("[BRIDGE] Execution Context Entrypoint Address Mapped Natively to: 0x%08X\n", native_entrypoint);
