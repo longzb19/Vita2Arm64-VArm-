@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <elf.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include "varm_elf.h"  // Swapped from <elf.h> for absolute layout control
 #include "varm_gxm_backend.h"
 #include "varm_menu.h"
 
@@ -19,19 +19,6 @@
 // PS Vita Hardware Architecture Constraints
 #define VITA_MAX_RAM_SIZE (512 * 1024 * 1024)
 #define VITA_USER_BASE_VADDR 0x81000000
-
-typedef struct {
-    uint16_t attributes;
-    uint8_t  major_version;
-    uint8_t  minor_version;
-    char     module_name[27];
-    uint8_t  type;
-    uint32_t gp_value;
-    uint32_t ent_top;
-    uint32_t ent_end;
-    uint32_t stub_top;
-    uint32_t stub_end;
-} __attribute__((packed)) SceModuleInfo;
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -53,9 +40,9 @@ int main(int argc, char** argv) {
 
     printf("Opening target binary: %s (Size: %u bytes)\n", filepath, total_file_size);
 
-    Elf32_Ehdr elf_hdr;
+    Varm_Elf32_Ehdr elf_hdr; // Updated to architectural safe type
     fseek(file, SONY_SCE_OFFSET, SEEK_SET);
-    if (fread(&elf_hdr, 1, sizeof(Elf32_Ehdr), file) != sizeof(Elf32_Ehdr)) {
+    if (fread(&elf_hdr, 1, sizeof(Varm_Elf32_Ehdr), file) != sizeof(Varm_Elf32_Ehdr)) {
         printf("[ERROR] Failed to read ELF Header\n");
         fclose(file);
         return -1;
@@ -75,13 +62,13 @@ int main(int argc, char** argv) {
 
     long phdr_table_offset = SONY_SCE_OFFSET + elf_hdr.e_phoff;
     uint32_t module_info_vaddr = 0;
-    SceModuleInfo mod_info_struct;
+    Varm_SceModuleInfo mod_info_struct; // Updated to architectural safe type
     int successfully_read = 0;
 
     for (int i = 0; i < elf_hdr.e_phnum; i++) {
-        Elf32_Phdr phdr;
-        fseek(file, phdr_table_offset + (i * sizeof(Elf32_Phdr)), SEEK_SET);
-        if (fread(&phdr, 1, sizeof(Elf32_Phdr), file) != sizeof(Elf32_Phdr)) continue;
+        Varm_Elf32_Phdr phdr; // Updated to architectural safe type
+        fseek(file, phdr_table_offset + (i * sizeof(Varm_Elf32_Phdr)), SEEK_SET);
+        if (fread(&phdr, 1, sizeof(Varm_Elf32_Phdr), file) != sizeof(Varm_Elf32_Phdr)) continue;
 
         uint32_t vaddr = phdr.p_vaddr;
         uint32_t mem_size = phdr.p_memsz;
@@ -92,17 +79,16 @@ int main(int argc, char** argv) {
             module_info_vaddr = vaddr;
         }
 
-        // FIXED: Isolated checks prevent mangled bounds from bypassing alignment sanitization
+        // Enhanced layout alignment check to clip massive out-of-bounds sizes
         if (vaddr == 0x00000000 || mem_size > VITA_MAX_RAM_SIZE) {
             printf("[SANITIZER] Warning: Segment #%d contains irregular specs (Size: %u, VAddr: 0x%08X).\n", i, mem_size, vaddr);
 
-            // Fix 1: Correct baseline addresses independently
             if (vaddr == 0x00000000) {
                 vaddr = VITA_USER_BASE_VADDR;
             }
 
-            // Fix 2: Clamp corrupted/encrypted segment sizes down to physical bounds independently
             if (mem_size > VITA_MAX_RAM_SIZE) {
+                // Clamp corrupted/encrypted headers to a page-aligned file size or safe 64KB fallback
                 if (file_size > 0 && file_size <= VITA_MAX_RAM_SIZE) {
                     mem_size = (file_size + 0xFFF) & ~0xFFF;
                 } else {
@@ -123,9 +109,9 @@ int main(int argc, char** argv) {
         uint32_t target_vaddr = (module_info_vaddr != 0) ? module_info_vaddr : (VITA_USER_BASE_VADDR + 0x80);
         if (target_vaddr >= vaddr && target_vaddr < (vaddr + mem_size)) {
             uint32_t final_file_offset = file_offset + (target_vaddr - vaddr);
-            if (final_file_offset + sizeof(SceModuleInfo) <= total_file_size) {
+            if (final_file_offset + sizeof(Varm_SceModuleInfo) <= total_file_size) {
                 fseek(file, final_file_offset, SEEK_SET);
-                if (fread(&mod_info_struct, 1, sizeof(SceModuleInfo), file) == sizeof(SceModuleInfo)) {
+                if (fread(&mod_info_struct, 1, sizeof(Varm_SceModuleInfo), file) == sizeof(Varm_SceModuleInfo)) {
                     successfully_read = 1;
                 }
             }
