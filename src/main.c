@@ -5,7 +5,6 @@
 #include <elf.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <sys/stat.h>
 #include "varm_gxm_backend.h"
 #include "varm_menu.h"
 
@@ -34,77 +33,17 @@ typedef struct {
     uint32_t stub_end;
 } __attribute__((packed)) SceModuleInfo;
 
-// Helper function to detect file extensions (.vpk or .zip)
-int has_file_extension(const char *str, const char *ext) {
-    size_t len = strlen(str);
-    size_t ext_len = strlen(ext);
-    return len >= ext_len && strcmp(str + len - ext_len, ext) == 0;
-}
-
-// First-launch Triage: Checks if it's an encrypted retail title and applies decryption key passes
-int check_and_decrypt_binary(const char* filepath) {
-    FILE* f = fopen(filepath, "r+b");
-    if (!f) return 0;
-
-    uint8_t magic[4];
-    fseek(f, 0, SEEK_SET);
-    fread(magic, 1, 4, f);
-    fclose(f);
-
-    // Check if the container starts with Sony standard SCE signatures
-    if (memcmp(magic, "SCE", 3) == 0) {
-        printf("[VARM CORE] Detected encrypted retail Sony container header.\n");
-        printf("[VARM CORE] Locating NoNpDrm license keys (work.bin) for decryption processing...\n");
-
-        // Placeholder hook: This is where you connect your open-source AES decryption
-        // pipelines (like unself routines) to decrypt program blocks in-place.
-
-        printf("[SUCCESS] In-place decryption pass complete! Binary container prepped for ELF loader.\n");
-        return 1;
-    }
-    return 0; // Already unencrypted homebrew or raw ELF
-}
-
 int main(int argc, char** argv) {
     if (argc < 2) {
-        printf("Usage: %s <path_to_game.vpk/.zip/eboot.bin>\n", argv[0]);
+        printf("Usage: %s <path_to_eboot.bin>\n", argv[0]);
         return -1;
     }
 
-    char target_binary_path[512];
-    strncpy(target_binary_path, argv[1], sizeof(target_binary_path) - 1);
-    target_binary_path[sizeof(target_binary_path) - 1] = '\0';
-
-    // 1. ARCHIVE COMPRESSION TRIAGE SYSTEM (.vpk / .zip)
-    if (has_file_extension(target_binary_path, ".vpk") || has_file_extension(target_binary_path, ".zip")) {
-        printf("[VARM CORE] Compressed installation archive detected: %s\n", target_binary_path);
-
-        // Create a local game-specific cache directory on the SD storage card workspace
-        char cache_dir[512];
-        snprintf(cache_dir, sizeof(cache_dir), "./varm_cache");
-        mkdir(cache_dir, 0777);
-
-        char unzip_cmd[1024];
-        // Quietly unpack the executable file out of the package
-        snprintf(unzip_cmd, sizeof(unzip_cmd), "unzip -o -q \"%s\" eboot.bin -d %s", argv[1], cache_dir);
-
-        printf("[VARM CORE] Unpacking game package layers natively to workspace cache...\n");
-        if (system(unzip_cmd) != 0) {
-            printf("[ERROR] Failed to extract archive layers natively.\n");
-            return -1;
-        }
-
-        // Reroute target binary to our fresh extracted target
-        snprintf(target_binary_path, sizeof(target_binary_path), "%s/eboot.bin", cache_dir);
-    }
-
-    // 2. RUN RETAIL DECRYPTION ANALYSIS CHECK
-    check_and_decrypt_binary(target_binary_path);
-
-    // 3. EXECUTE TRADITIONAL BINARY ELF PARSING PIPELINE
-    FILE* file = fopen(target_binary_path, "rb");
+    // Accept raw binaries directly
+    const char* filepath = argv[1];
+    FILE* file = fopen(filepath, "rb");
     if (!file) {
-        printf("[ERROR] Could not open target binary: %s\n", target_binary_path);
+        printf("[ERROR] Could not open target binary: %s\n", filepath);
         return -1;
     }
 
@@ -112,7 +51,7 @@ int main(int argc, char** argv) {
     uint32_t total_file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
-    printf("Opening target binary: %s (Size: %u bytes)\n", target_binary_path, total_file_size);
+    printf("Opening target binary: %s (Size: %u bytes)\n", filepath, total_file_size);
 
     Elf32_Ehdr elf_hdr;
     fseek(file, SONY_SCE_OFFSET, SEEK_SET);
@@ -153,16 +92,22 @@ int main(int argc, char** argv) {
             module_info_vaddr = vaddr;
         }
 
+        // FIXED: Isolated checks prevent mangled bounds from bypassing alignment sanitization
         if (vaddr == 0x00000000 || mem_size > VITA_MAX_RAM_SIZE) {
             printf("[SANITIZER] Warning: Segment #%d contains irregular specs (Size: %u, VAddr: 0x%08X).\n", i, mem_size, vaddr);
 
+            // Fix 1: Correct baseline addresses independently
             if (vaddr == 0x00000000) {
                 vaddr = VITA_USER_BASE_VADDR;
-                if (file_size > 0 && file_size <= 65536) {
-                    mem_size = 65536;
-                    file_size = 65536;
+            }
+
+            // Fix 2: Clamp corrupted/encrypted segment sizes down to physical bounds independently
+            if (mem_size > VITA_MAX_RAM_SIZE) {
+                if (file_size > 0 && file_size <= VITA_MAX_RAM_SIZE) {
+                    mem_size = (file_size + 0xFFF) & ~0xFFF;
                 } else {
                     mem_size = 65536;
+                    file_size = 65536;
                 }
             }
             printf("[SANITIZER] Re-aligned Segment #%d to safe bounds: Size: %u | VAddr: 0x%08X\n", i, mem_size, vaddr);
@@ -231,9 +176,6 @@ int main(int argc, char** argv) {
 
     printf("\n=== RUNTIME EXECUTION STREAM ===\n");
     while (1) {
-        int sample_key = 0;
-        bool sample_press = false;
-
         if (g_varm_state == VARM_STATE_MENU_ACTIVE) {
             varm_menu_render_overlay();
             usleep(33000);
