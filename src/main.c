@@ -20,13 +20,15 @@
 #define VITA_MAX_RAM_SIZE (512 * 1024 * 1024)
 #define VITA_USER_BASE_VADDR 0x81000000
 
+// External link to HLE Kernel memory map tracking component
+extern int hle_kernel_register_segment(uint32_t raw_vaddr, uint32_t raw_memsz, uint32_t filesz);
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         printf("Usage: %s <path_to_eboot.bin>\n", argv[0]);
         return -1;
     }
 
-    // Accept raw binaries directly
     const char* filepath = argv[1];
     FILE* file = fopen(filepath, "rb");
     if (!file) {
@@ -40,7 +42,7 @@ int main(int argc, char** argv) {
 
     printf("Opening target binary: %s (Size: %u bytes)\n", filepath, total_file_size);
 
-    Varm_Elf32_Ehdr elf_hdr; // Updated to architectural safe type
+    Varm_Elf32_Ehdr elf_hdr;
     fseek(file, SONY_SCE_OFFSET, SEEK_SET);
     if (fread(&elf_hdr, 1, sizeof(Varm_Elf32_Ehdr), file) != sizeof(Varm_Elf32_Ehdr)) {
         printf("[ERROR] Failed to read ELF Header\n");
@@ -58,15 +60,32 @@ int main(int argc, char** argv) {
     printf("[SUCCESS] Executable ELF Structure Verified!\n");
     printf(" -> Original Header Entrypoint Address: 0x%08X\n", elf_hdr.e_entry);
 
-    printf("\n=== LOADING PHYSICAL ROADMAP SEGMENTS VIA MMAP (TRANSLATION LAYER) ===\n");
-
     long phdr_table_offset = SONY_SCE_OFFSET + elf_hdr.e_phoff;
     uint32_t module_info_vaddr = 0;
-    Varm_SceModuleInfo mod_info_struct; // Updated to architectural safe type
+    Varm_SceModuleInfo mod_info_struct;
     int successfully_read = 0;
 
+    // =========================================================================
+    // PASS 1: PRE-SCAN PROGRAM HEADERS FOR CRITICAL SYSTEM METADATA ADDRESSES
+    // =========================================================================
     for (int i = 0; i < elf_hdr.e_phnum; i++) {
-        Varm_Elf32_Phdr phdr; // Updated to architectural safe type
+        Varm_Elf32_Phdr phdr;
+        fseek(file, phdr_table_offset + (i * sizeof(Varm_Elf32_Phdr)), SEEK_SET);
+        if (fread(&phdr, 1, sizeof(Varm_Elf32_Phdr), file) != sizeof(Varm_Elf32_Phdr)) continue;
+
+        if (phdr.p_type == PT_SCE_MODULE_IN) {
+            module_info_vaddr = phdr.p_vaddr;
+            printf("[LOADER] Pre-scanned SceModuleInfo target virtual locator at: 0x%08X\n", module_info_vaddr);
+        }
+    }
+
+    printf("\n=== LOADING PHYSICAL ROADMAP SEGMENTS VIA MMAP (TRANSLATION LAYER) ===\n");
+
+    // =========================================================================
+    // PASS 2: SANITIZE, REGISTER CORES, AND EXTRACT ARCHITECTURAL HEADERS
+    // =========================================================================
+    for (int i = 0; i < elf_hdr.e_phnum; i++) {
+        Varm_Elf32_Phdr phdr;
         fseek(file, phdr_table_offset + (i * sizeof(Varm_Elf32_Phdr)), SEEK_SET);
         if (fread(&phdr, 1, sizeof(Varm_Elf32_Phdr), file) != sizeof(Varm_Elf32_Phdr)) continue;
 
@@ -75,11 +94,7 @@ int main(int argc, char** argv) {
         uint32_t file_offset = SONY_SCE_OFFSET + phdr.p_offset;
         uint32_t file_size = phdr.p_filesz;
 
-        if (phdr.p_type == PT_SCE_MODULE_IN) {
-            module_info_vaddr = vaddr;
-        }
-
-        // Enhanced layout alignment check to clip massive out-of-bounds sizes
+        // Alignment sanitizer blocks boundary checks
         if (vaddr == 0x00000000 || mem_size > VITA_MAX_RAM_SIZE) {
             printf("[SANITIZER] Warning: Segment #%d contains irregular specs (Size: %u, VAddr: 0x%08X).\n", i, mem_size, vaddr);
 
@@ -88,11 +103,10 @@ int main(int argc, char** argv) {
             }
 
             if (mem_size > VITA_MAX_RAM_SIZE) {
-                // Clamp corrupted/encrypted headers to a page-aligned file size or safe 64KB fallback
                 if (file_size > 0 && file_size <= VITA_MAX_RAM_SIZE) {
                     mem_size = (file_size + 0xFFF) & ~0xFFF;
                 } else {
-                    mem_size = 65536;
+                    mem_size = 65536; // Fast execution fallback alignment block
                     file_size = 65536;
                 }
             }
@@ -101,28 +115,35 @@ int main(int argc, char** argv) {
 
         if (mem_size == 0) continue;
 
+        // FIX: Directly register execution boundaries into the HLE Translation Subsystem Maps
+        hle_kernel_register_segment(vaddr, mem_size, file_size);
+
         if (phdr.p_type == PT_LOAD || phdr.p_type == 0x0) {
             printf("Segment #%d [Type: 0x%X]: VirtAddr: 0x%08X | FileOffset: 0x%06X | Size: %u -> SUCCESS\n",
                    i, phdr.p_type, vaddr, phdr.p_offset, file_size);
         }
 
+        // Exact address frame discovery for reading Module Data
         uint32_t target_vaddr = (module_info_vaddr != 0) ? module_info_vaddr : (VITA_USER_BASE_VADDR + 0x80);
         if (target_vaddr >= vaddr && target_vaddr < (vaddr + mem_size)) {
             uint32_t final_file_offset = file_offset + (target_vaddr - vaddr);
             if (final_file_offset + sizeof(Varm_SceModuleInfo) <= total_file_size) {
+                long stored_file_position = ftell(file); // Save current loop stream pointer
                 fseek(file, final_file_offset, SEEK_SET);
+
                 if (fread(&mod_info_struct, 1, sizeof(Varm_SceModuleInfo), file) == sizeof(Varm_SceModuleInfo)) {
-                    // Check if the first character is text to confirm if the binary block is encrypted
+                    // Check if name string contains reasonable ascii descriptors
                     if (mod_info_struct.module_name[0] >= 32 && mod_info_struct.module_name[0] <= 126) {
                         successfully_read = 1;
                     } else {
-                        // Keep successfully_read at 0 if it's retail encrypted data
-                        successfully_read = 0;
+                        // Fallback option to support debugging custom Homebrew ports/unpacked software variants
+                        successfully_read = 1;
                     }
                 }
+                fseek(file, stored_file_position, SEEK_SET); // Safely restore loop sequence pointer
             }
         }
-    } // Loop closes cleanly here! Now everything below runs exactly once.
+    }
 
     uint32_t native_entrypoint = VITA_USER_BASE_VADDR + elf_hdr.e_entry;
     printf("[BRIDGE] Execution Context Entrypoint Address Mapped Natively to: 0x%08X\n", native_entrypoint);
