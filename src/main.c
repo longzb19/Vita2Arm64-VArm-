@@ -8,7 +8,7 @@
 #include "varm_gxm_backend.h"
 #include "varm_menu.h"
 #include "varm_input.h"
-#include "hle_kernel.c"
+#include "hle_kernel.h"
 
 // PS Vita Hardware Architecture Constraints
 #define VITA_MAX_RAM_SIZE (512 * 1024 * 1024)
@@ -235,20 +235,21 @@ int main(int argc, char** argv) {
 
     while (1) {
         if (g_varm_state == VARM_STATE_MENU_ACTIVE) {
-            // Check for input
             int action = varm_input_poll();
-            if (action == 1 && g_menu_selection > 1) g_menu_selection--; // UP
-            if (action == 2 && g_menu_selection < 6) g_menu_selection++; // DOWN
+
+            // Logic to move selection
+            if (action == 1 && g_menu_selection > 1) g_menu_selection--;
+            if (action == 2 && g_menu_selection < 6) g_menu_selection++;
+
             if (action == 3) {
                  printf("\n[ACTION] Selected Option %d\n", g_menu_selection);
-                 // Trigger logic here
             }
 
-            varm_menu_render_overlay(g_menu_selection);
+            varm_menu_render_overlay(g_menu_selection); // This will now match the header
             usleep(33000);
         }
         else if (g_varm_state == VARM_STATE_RUNNING) {
-            // ... (your existing runner code)
+            // ... your runner code ...
         }
     }
 

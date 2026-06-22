@@ -22,6 +22,6 @@ extern VarmRuntimeState g_varm_state;
 
 void varm_menu_init(void);
 void varm_menu_handle_inputs(int key_code, bool pressed);
-void varm_menu_render_overlay(void);
+void varm_menu_render_overlay(int selected);
 
 #endif // VARM_MENU_H
