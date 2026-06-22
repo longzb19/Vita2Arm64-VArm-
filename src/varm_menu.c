@@ -3,7 +3,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// ... your existing setup logic ...
+// Restore the global state variables that the placeholder hid
+VarmRuntimeState g_varm_state = 0; // 0 maps to VARM_STATE_MENU_ACTIVE
+
+void varm_menu_init(void) {
+    // Start inside the menu runtime overlay
+    g_varm_state = 0;
+}
 
 void varm_menu_render_overlay(int selected) {
     char cpu_label[64];
