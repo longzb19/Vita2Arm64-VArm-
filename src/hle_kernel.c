@@ -100,3 +100,12 @@ void hle_kernel_dump_maps(void) {
     }
     printf("======================================\n");
 }
+// Add this to the very bottom of src/hle_kernel.c
+
+void hle_kernel_init(void) {
+    printf("[HLE KERNEL] Initializing translation layer subsystems...\n");
+
+    // Explicitly reset the tracking state to guarantee a clean slate
+    g_segment_count = 0;
+    memset(g_registered_segments, 0, sizeof(g_registered_segments));
+}
