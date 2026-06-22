@@ -28,15 +28,15 @@ typedef struct {
 
 // Explicitly 32-bit ELF Program Header
 typedef struct {
-    uint32_t p_type;
-    uint32_t p_offset;
-    uint32_t p_vaddr;
-    uint32_t p_paddr;
-    uint32_t p_filesz;
-    uint32_t p_memsz;
-    uint32_t p_flags;
-    uint32_t p_align;
-} Varm_Elf32_Phdr;
+    uint32_t p_type;     // Type of segment
+    uint32_t p_offset;   // File offset where segment resides
+    uint32_t p_vaddr;    // Target Virtual address in memory
+    uint32_t p_paddr;    // Physical address (typically unused)
+    uint32_t p_filesz;   // Size of data inside file container
+    uint32_t p_memsz;    // Allocated size inside virtual memory space
+    uint32_t p_flags;    // Execution permissions (rwx)
+    uint32_t p_align;    // Memory boundary page alignments
+} __attribute__((packed)) Varm_Elf32_Phdr;
 
 // Strict fixed-width Sony module structure layout
 typedef struct {
