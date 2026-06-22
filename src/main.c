@@ -230,28 +230,71 @@ int main(int argc, char** argv) {
     printf("[CPU] Core Ready! Awaiting instruction stream routing at Entrypoint: 0x%08X\n", native_entrypoint);
 
     int mock_cycles = 0;
-    int was_in_menu = 0; // Tracks our UI state transition
-    int g_menu_selection = 1; // Put this variable right before the while loop
+    int was_in_menu = 0;        // Tracks our UI state transition
+    int g_menu_selection = 1;   // 1-indexed selection for menu navigation
 
     while (1) {
+        // -----------------------------------------------------------------
+        // STATE 0: MENU UI LAYER
+        // -----------------------------------------------------------------
         if (g_varm_state == VARM_STATE_MENU_ACTIVE) {
+            // Check for input
             int action = varm_input_poll();
-
-            // Logic to move selection
-            if (action == 1 && g_menu_selection > 1) g_menu_selection--;
-            if (action == 2 && g_menu_selection < 6) g_menu_selection++;
+            if (action == 1 && g_menu_selection > 1) g_menu_selection--; // D-Pad UP
+            if (action == 2 && g_menu_selection < 7) g_menu_selection++; // D-Pad DOWN (Extended to 7 for QUIT)
 
             if (action == 3) {
                  printf("\n[ACTION] Selected Option %d\n", g_menu_selection);
+                 switch (g_menu_selection) {
+                     case 1: // RESUME TRANSLATION RUNTIME
+                         g_varm_state = VARM_STATE_RUNNING;
+                         break;
+                     case 7: // QUIT EMULATOR
+                         printf("\n[VARM] Shutting down translation core cleanly...\n");
+                         exit(0);
+                     default:
+                         printf("\n[VARM TUI] Option %d selected (Feature placeholder active).\n", g_menu_selection);
+                         break;
+                 }
             }
 
-            varm_menu_render_overlay(g_menu_selection); // This will now match the header
-            usleep(33000);
+            // Only clear the screen the exact moment we flip into the menu
+            if (!was_in_menu) {
+                printf("\033[2J");
+                was_in_menu = 1;
+            }
+
+            // ANSI ESCAPE: Snap cursor back to Home (0,0) to prevent render flickers
+            printf("\033[H");
+
+            // Pass the 1-indexed menu selection variable directly to the display overlay
+            varm_menu_render_overlay(g_menu_selection);
+
+            usleep(33000); // Target ~30 FPS UI update loop
         }
+        // -----------------------------------------------------------------
+        // STATE 1: CORE ENGINE TRANSLATION EXECUTION LAYER
+        // -----------------------------------------------------------------
         else if (g_varm_state == VARM_STATE_RUNNING) {
-            // ... your runner code ...
+            // If we just flipped out of the menu, wipe the console clean and resume tracking logs
+            if (was_in_menu) {
+                printf("\033[2J\033[H");
+                printf("=== RUNTIME EXECUTION STREAM RESUMED ===\n");
+                was_in_menu = 0;
+            }
+
+            mock_cycles++;
+
+            // Throttle thread outputs so text generation does not bottleneck CPU cycle translations
+            if (mock_cycles % 50000 == 0) {
+                printf("\r[TRANSLATOR] Mapped Block Decoding Active... Cycles: %d   ", mock_cycles);
+                fflush(stdout);
+            }
+
+            // Your ARM translation pipeline/block decoding core execution logic continues here
+            // e.g., v_arm_step();
         }
-    }
+    } // <-- Ends the while (1) loop cleanly
 
     return 0;
-}
+} // <-- Ends the main() function cleanly

@@ -75,25 +75,30 @@ void varm_menu_handle_inputs(int key_code, bool pressed) {
 
 // Inside your varm_menu.c
 void varm_menu_render_overlay(int selected) {
-    printf("\033[H"); // Snap to top
+    printf("\033[H"); // Snap cursor to top left
     printf("==================================================\n");
     printf("         VITA2ARM SYSTEM DIAGNOSTIC OVERLAY       \n");
     printf("==================================================\n");
 
-    char* items[] = {
+    const char* items[] = {
         "RESUME TRANSLATION RUNTIME",
         "DECRYPT ACTIVE SONY EBOOT CONTAINER",
         "VITA GRAPHICS CONTROLLER CONFIG",
         "INJECT VITA CHEAT PATCH CODES",
         "VITA CPU CLOCK: [500]",
-        "VITA GPU CLOCK: [222]"
+        "VITA GPU CLOCK: [222]",
+        "QUIT EMULATOR"
     };
+    int total_items = sizeof(items) / sizeof(items[0]);
 
-    for(int i = 0; i < 6; i++) {
-        if (selected == (i + 1))
-            printf(" -> [%d] %s\n", i+1, items[i]);
-        else
-            printf("    [%d] %s\n", i+1, items[i]);
+    for (int i = 0; i < total_items; i++) {
+        // Match against 1-indexed selected pointer from main.c
+        if ((i + 1) == selected) {
+            printf(" -> [%d] %s\n", i + 1, items[i]);
+        } else {
+            printf("    [%d] %s\n", i + 1, items[i]);
+        }
     }
     printf("==================================================\n");
+    fflush(stdout); // Force prompt buffer dump
 }
