@@ -73,19 +73,27 @@ void varm_menu_handle_inputs(int key_code, bool pressed) {
     }
 }
 
-void varm_menu_render_overlay(void) {
-    // Clear color to classic TestDisk / diagnostic blue screen
-    // If you use OpenGL ES inside varm_gxm_backend:
-    // glClearColor(0.0f, 0.0f, 0.55f, 1.0f);
-    // glClear(GL_COLOR_BUFFER_BIT);
-
-    printf("\n==================================================\n");
+// Inside your varm_menu.c
+void varm_menu_render_overlay(int selected) {
+    printf("\033[H"); // Snap to top
+    printf("==================================================\n");
     printf("         VITA2ARM SYSTEM DIAGNOSTIC OVERLAY       \n");
     printf("==================================================\n");
-    printf(" %s [1] DECRYPT ACTIVE SONY EBOOT CONTAINER\n", (s_selected_index == MENU_OPT_DECRYPT) ? "->" : "  ");
-    printf(" %s [2] VITA GRAPHICS CONTROLLER CONFIG\n",   (s_selected_index == MENU_OPT_GRAPHICS) ? "->" : "  ");
-    printf(" %s [3] INJECT VITA CHEAT PATCH CODES\n",      (s_selected_index == MENU_OPT_CHEATS) ? "->" : "  ");
-    printf(" %s [4] ALLWINNER H700 CPU OVERCLOCK: [%s]\n", (s_selected_index == MENU_OPT_OVERCLOCK) ? "->" : "  ", s_overclock_enabled ? "HIGH-SPEED" : "STOCK");
-    printf(" %s [5] RESUME TRANSLATION RUNTIME\n",         (s_selected_index == MENU_OPT_EXIT) ? "->" : "  ");
+
+    char* items[] = {
+        "RESUME TRANSLATION RUNTIME",
+        "DECRYPT ACTIVE SONY EBOOT CONTAINER",
+        "VITA GRAPHICS CONTROLLER CONFIG",
+        "INJECT VITA CHEAT PATCH CODES",
+        "VITA CPU CLOCK: [500]",
+        "VITA GPU CLOCK: [222]"
+    };
+
+    for(int i = 0; i < 6; i++) {
+        if (selected == (i + 1))
+            printf(" -> [%d] %s\n", i+1, items[i]);
+        else
+            printf("    [%d] %s\n", i+1, items[i]);
+    }
     printf("==================================================\n");
 }

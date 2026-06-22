@@ -12,6 +12,7 @@ add_executable(varm
     src/main.c
     src/hle_kernel.c
     src/varm_menu.c             # <-- ADD THIS LINE HERE
+    src/varm_input.c
     varm-gxm/src/hle/gxm.c
 )
 

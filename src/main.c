@@ -7,6 +7,8 @@
 #include "varm_elf.h"
 #include "varm_gxm_backend.h"
 #include "varm_menu.h"
+#include "varm_input.h"
+#include "hle_kernel.c"
 
 // PS Vita Hardware Architecture Constraints
 #define VITA_MAX_RAM_SIZE (512 * 1024 * 1024)
@@ -217,7 +219,9 @@ int main(int argc, char** argv) {
     }
 
     fclose(file);
+    hle_kernel_init();
     varm_menu_init();
+    varm_input_init();
 
 // =========================================================================
     // RUNTIME EXECUTION STREAM
@@ -226,26 +230,25 @@ int main(int argc, char** argv) {
     printf("[CPU] Core Ready! Awaiting instruction stream routing at Entrypoint: 0x%08X\n", native_entrypoint);
 
     int mock_cycles = 0;
+    int was_in_menu = 0; // Tracks our UI state transition
+    int g_menu_selection = 1; // Put this variable right before the while loop
 
     while (1) {
-        // LAYER 1: If menu is active, ONLY render UI and sleep. No cycle prints!
         if (g_varm_state == VARM_STATE_MENU_ACTIVE) {
-            varm_menu_render_overlay();
-            usleep(33000); // ~30 FPS UI Update block
-        }
-        // LAYER 2: If emulator is running, ONLY process cycles and single-line logs!
-        else if (g_varm_state == VARM_STATE_RUNNING) {
-            mock_cycles++;
-
-            // Throttle the print rate so standard output doesn't lag the engine
-            if (mock_cycles % 50000 == 0) {
-                // Notice: There is absolutely NO '\n' at the end of this string!
-                printf("\r[TRANSLATOR] Executing instruction stream... Total Cycles: %d", mock_cycles);
-                fflush(stdout);
+            // Check for input
+            int action = varm_input_poll();
+            if (action == 1 && g_menu_selection > 1) g_menu_selection--; // UP
+            if (action == 2 && g_menu_selection < 6) g_menu_selection++; // DOWN
+            if (action == 3) {
+                 printf("\n[ACTION] Selected Option %d\n", g_menu_selection);
+                 // Trigger logic here
             }
 
-            // CRITICAL CHECK: Make sure varm_menu_render_overlay() is NOT called here.
-            // If it runs inside the running state, its internal printfs will force newlines!
+            varm_menu_render_overlay(g_menu_selection);
+            usleep(33000);
+        }
+        else if (g_varm_state == VARM_STATE_RUNNING) {
+            // ... (your existing runner code)
         }
     }
 
