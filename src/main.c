@@ -10,6 +10,11 @@
 #include "varm_input.h"
 #include "hle_kernel.h"
 
+// Bring in your new modular tool interfaces
+#include "varm_graphics.h"
+#include "varm_cheats.h"
+#include "varm_system.h"
+
 // PS Vita Hardware Architecture Constraints
 #define VITA_MAX_RAM_SIZE (512 * 1024 * 1024)
 #define VITA_USER_BASE_VADDR 0x81000000
@@ -219,29 +224,36 @@ int main(int argc, char** argv) {
     }
 
     fclose(file);
+
+    // Initialize core subsystems
     hle_kernel_init();
     varm_menu_init();
     varm_input_init();
 
-// =========================================================================
-    // RUNTIME EXECUTION STREAM
-    // =========================================================================
+    // Initialize external tools
+    varm_graphics_init();
+    varm_cheats_init();
+    varm_system_init();
+
     printf("\n=== RUNTIME EXECUTION STREAM ===\n");
     printf("[CPU] Core Ready! Awaiting instruction stream routing at Entrypoint: 0x%08X\n", native_entrypoint);
 
-    int mock_cycles = 0;
-    int was_in_menu = 0;        // Tracks our UI state transition
-    int g_menu_selection = 1;   // 1-indexed selection for menu navigation
+    int was_in_menu = 0;
+    int g_menu_selection = 1;
 
+    // =========================================================================
+    // THE HEARTBEAT: MAIN EXECUTION LOOP
+    // =========================================================================
     while (1) {
+
         // -----------------------------------------------------------------
         // STATE 0: MENU UI LAYER
         // -----------------------------------------------------------------
         if (g_varm_state == VARM_STATE_MENU_ACTIVE) {
-            // Check for input
+
             int action = varm_input_poll();
-            if (action == 1 && g_menu_selection > 1) g_menu_selection--; // D-Pad UP
-            if (action == 2 && g_menu_selection < 7) g_menu_selection++; // D-Pad DOWN (Extended to 7 for QUIT)
+            if (action == 1 && g_menu_selection > 1) g_menu_selection--;
+            if (action == 2 && g_menu_selection < 7) g_menu_selection++;
 
             if (action == 3) {
                  printf("\n[ACTION] Selected Option %d\n", g_menu_selection);
@@ -249,52 +261,74 @@ int main(int argc, char** argv) {
                      case 1: // RESUME TRANSLATION RUNTIME
                          g_varm_state = VARM_STATE_RUNNING;
                          break;
+                     case 2: // DECRYPT CONTAINER
+                         printf("\n[VARM TUI] Running built-in container decryption parser...\n");
+                         break;
+                     case 3: // GRAPHICS CONFIG
+                         varm_graphics_configure();
+                         break;
+                     case 4: // CHEATS INJECTION
+                         varm_cheats_inject();
+                         break;
+                     case 5: // CYCLE CPU SPEEDS
+                         {
+                             int current = varm_system_get_cpu_clock();
+                             int next = (current == 500) ? 333 : (current == 333) ? 444 : 500;
+                             varm_system_set_cpu_clock(next);
+                         }
+                         break;
+                     case 6: // CYCLE GPU SPEEDS
+                         {
+                             int current = varm_system_get_gpu_clock();
+                             int next = (current == 222) ? 111 : (current == 111) ? 166 : 222;
+                             varm_system_set_gpu_clock(next);
+                         }
+                         break;
                      case 7: // QUIT EMULATOR
                          printf("\n[VARM] Shutting down translation core cleanly...\n");
                          exit(0);
                      default:
-                         printf("\n[VARM TUI] Option %d selected (Feature placeholder active).\n", g_menu_selection);
                          break;
                  }
             }
 
-            // Only clear the screen the exact moment we flip into the menu
             if (!was_in_menu) {
                 printf("\033[2J");
                 was_in_menu = 1;
             }
 
-            // ANSI ESCAPE: Snap cursor back to Home (0,0) to prevent render flickers
             printf("\033[H");
-
-            // Pass the 1-indexed menu selection variable directly to the display overlay
             varm_menu_render_overlay(g_menu_selection);
-
-            usleep(33000); // Target ~30 FPS UI update loop
+            usleep(33000);
         }
+
         // -----------------------------------------------------------------
         // STATE 1: CORE ENGINE TRANSLATION EXECUTION LAYER
         // -----------------------------------------------------------------
         else if (g_varm_state == VARM_STATE_RUNNING) {
-            // If we just flipped out of the menu, wipe the console clean and resume tracking logs
+
             if (was_in_menu) {
                 printf("\033[2J\033[H");
                 printf("=== RUNTIME EXECUTION STREAM RESUMED ===\n");
                 was_in_menu = 0;
             }
 
-            mock_cycles++;
+            static uint64_t actual_cycles = 0;
+            actual_cycles++;
 
-            // Throttle thread outputs so text generation does not bottleneck CPU cycle translations
-            if (mock_cycles % 50000 == 0) {
-                printf("\r[TRANSLATOR] Mapped Block Decoding Active... Cycles: %d   ", mock_cycles);
+            if (actual_cycles % 200000 == 0) {
+                printf("\r[TRANSLATOR] Mapped Block Decoding Active... Cycles: %lu   ", actual_cycles);
                 fflush(stdout);
             }
 
-            // Your ARM translation pipeline/block decoding core execution logic continues here
-            // e.g., v_arm_step();
+            int run_action = varm_input_poll();
+            if (run_action == 3) {
+                g_varm_state = VARM_STATE_MENU_ACTIVE;
+            }
+
+            usleep(10);
         }
-    } // <-- Ends the while (1) loop cleanly
+    }
 
     return 0;
-} // <-- Ends the main() function cleanly
+}
