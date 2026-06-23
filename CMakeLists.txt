@@ -11,6 +11,7 @@ include_directories(varm-gxm/include)
 add_executable(varm
     src/main.c
     src/hle_kernel.c
+    src/hle_module.c             # <-- Drop our new modular registry framework here
     src/varm_menu.c
     src/varm_input.c
     src/varm_graphics.c         # <-- Added here

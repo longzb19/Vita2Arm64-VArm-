@@ -9,6 +9,7 @@
 #include "varm_menu.h"
 #include "varm_input.h"
 #include "hle_kernel.h"
+#include "hle_module.h"
 
 // Bring in your new modular tool interfaces
 #include "varm_graphics.h"
@@ -227,6 +228,7 @@ int main(int argc, char** argv) {
 
     // Initialize core subsystems
     hle_kernel_init();
+    hle_module_init();     // <-- Starts our translation hook tracking engine seamlessly!
     varm_menu_init();
     varm_input_init();
 
@@ -246,61 +248,33 @@ int main(int argc, char** argv) {
     // =========================================================================
     while (1) {
 
-        // -----------------------------------------------------------------
-        // STATE 0: MENU UI LAYER
-        // -----------------------------------------------------------------
-        if (g_varm_state == VARM_STATE_MENU_ACTIVE) {
+// Keep track of the highlighted item (1 to 7)
+static int selected_item = 1;
+if (g_varm_state == VARM_STATE_MENU_ACTIVE) {
+    unsigned int active_inputs = varm_input_get_translated_state();
 
-            int action = varm_input_poll();
-            if (action == 1 && g_menu_selection > 1) g_menu_selection--;
-            if (action == 2 && g_menu_selection < 7) g_menu_selection++;
+    printf("\n==================================================\n");
+    printf("         VITA2ARM SYSTEM DIAGNOSTIC OVERLAY       \n");
+    printf("==================================================\n");
 
-            if (action == 3) {
-                 printf("\n[ACTION] Selected Option %d\n", g_menu_selection);
-                 switch (g_menu_selection) {
-                     case 1: // RESUME TRANSLATION RUNTIME
-                         g_varm_state = VARM_STATE_RUNNING;
-                         break;
-                     case 2: // DECRYPT CONTAINER
-                         printf("\n[VARM TUI] Running built-in container decryption parser...\n");
-                         break;
-                     case 3: // GRAPHICS CONFIG
-                         varm_graphics_configure();
-                         break;
-                     case 4: // CHEATS INJECTION
-                         varm_cheats_inject();
-                         break;
-                     case 5: // CYCLE CPU SPEEDS
-                         {
-                             int current = varm_system_get_cpu_clock();
-                             int next = (current == 500) ? 333 : (current == 333) ? 444 : 500;
-                             varm_system_set_cpu_clock(next);
-                         }
-                         break;
-                     case 6: // CYCLE GPU SPEEDS
-                         {
-                             int current = varm_system_get_gpu_clock();
-                             int next = (current == 222) ? 111 : (current == 111) ? 166 : 222;
-                             varm_system_set_gpu_clock(next);
-                         }
-                         break;
-                     case 7: // QUIT EMULATOR
-                         printf("\n[VARM] Shutting down translation core cleanly...\n");
-                         exit(0);
-                     default:
-                         break;
-                 }
-            }
+    // Call your default render layout
+    varm_menu_render_overlay(selected_item);
 
-            if (!was_in_menu) {
-                printf("\033[2J");
-                was_in_menu = 1;
-            }
+    printf("==================================================\n");
+    printf(" ACTIVE TRANSLATED REGISTER MASK: [0x%08X]\n", active_inputs);
 
-            printf("\033[H");
-            varm_menu_render_overlay(g_menu_selection);
-            usleep(33000);
-        }
+    // If specific buttons are held down, write an interface alert inside the overlay logs
+    if (active_inputs & VITA_CTRL_CROSS) {
+        printf(" -> STATUS MESSAGE: Cross Context active.\n");
+    }
+    if (active_inputs & VITA_CTRL_START) {
+        printf(" -> SYSTEM COMMAND: Launching translation execution sequence.\n");
+        g_varm_state = VARM_STATE_RUNNING;
+    }
+    printf("==================================================\n");
+
+    usleep(60000); // 60ms layout throttle to keep log sizes clean
+}
 
         // -----------------------------------------------------------------
         // STATE 1: CORE ENGINE TRANSLATION EXECUTION LAYER
