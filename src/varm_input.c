@@ -38,6 +38,20 @@ void varm_input_init(void) {
     }
 }
 
+// 🌟 FIX: Implemented the missing polling function for the menu framework
+int varm_input_poll(void) {
+    if (g_input_fd < 0) return 0;
+
+    struct input_event ev;
+    // Read a single layout update if one is waiting in the kernel queue
+    if (read(g_input_fd, &ev, sizeof(struct input_event)) > 0) {
+        if (ev.type == EV_KEY && ev.value == 1) { // Key Pressed Event
+            return ev.code; // Returns the raw physical hardware keycode (e.g., 103, 108)
+        }
+    }
+    return 0; // No key updates available
+}
+
 // Scans all buttons at once and returns a combined bitwise mask for the runtime engine
 unsigned int varm_input_get_translated_state(void) {
     if (g_input_fd < 0) return 0;

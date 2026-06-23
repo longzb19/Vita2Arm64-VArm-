@@ -4,7 +4,7 @@
 #include <stdlib.h>
 
 // Restore the global state variables that the placeholder hid
-VarmRuntimeState g_varm_state = 0; // 0 maps to VARM_STATE_MENU_ACTIVE
+VarmRuntimeState g_varm_state = VARM_STATE_MENU_ACTIVE;
 
 void varm_menu_init(void) {
     // Start inside the menu runtime overlay

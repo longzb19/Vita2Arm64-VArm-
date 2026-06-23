@@ -41,6 +41,7 @@ typedef struct {
 } ControlMap;
 
 void varm_input_init(void);
+int varm_input_poll(void);
 unsigned int varm_input_get_translated_state(void);
 
 #endif
