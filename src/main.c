@@ -10,6 +10,7 @@
 #include "varm_input.h"
 #include "hle_kernel.h"
 #include "hle_module.h"
+#include <GLES2/gl2.h>
 
 // Bring in your new modular tool interfaces
 #include "varm_graphics.h"
@@ -183,11 +184,15 @@ int main(int argc, char** argv) {
     printf("[BRIDGE] Execution Context Entrypoint Address Mapped Natively to: 0x%08X\n", native_entrypoint);
 
     printf("\n=== INITIALIZING GRAPHICS LAYER EMULATION ===\n");
-    V_RenderCoreType selected_core = VARM_RENDER_CORE_GLES;
-    V_GxmRendererInterface gxm_renderer;
 
-    if (varm_gxm_init_renderer(selected_core, &gxm_renderer) == 0) {
-        if (gxm_renderer.init_display() != 0) {
+    // 🌟 FIXED: Declared as gxm_interface and zeroed out cleanly to prevent garbage pointers
+    V_RenderCoreType selected_core = VARM_RENDER_CORE_GLES;
+    V_GxmRendererInterface gxm_interface;
+    memset(&gxm_interface, 0, sizeof(V_GxmRendererInterface));
+
+    // 🌟 FIXED: Passed &gxm_interface matching the name in our loop below
+    if (varm_gxm_init_renderer(selected_core, &gxm_interface) == 0) {
+        if (gxm_interface.init_display && gxm_interface.init_display() != 0) {
             printf("[WARNING] Selected core driver initialization failed. Falling back...\n");
         } else {
             printf("[GXM-GLES] Switched context to: OPENGL ES CORE\n");
@@ -218,7 +223,7 @@ int main(int argc, char** argv) {
         printf(" -> Export Table Boundaries (Entries): 0x000BFC90 - 0x00000000 (HLE Managed)\n");
     }
 
-fclose(file);
+    fclose(file);
 
     hle_kernel_init();
     hle_module_init();
@@ -278,14 +283,12 @@ fclose(file);
             }
 
             // VITA3K DESIGN APPROACH: Clear screen and render overlay using OpenGL ES primitives
-            glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            if (gxm_interface.clear_screen) {
+                gxm_interface.clear_screen(0.1f, 0.1f, 0.1f, 1.0f);
+            }
 
             // Call your upcoming GLES drawing code for the menu UI
-            varm_menu_render_gles_overlay(selected_item);
-
-            // Trigger muOS driver page flip
-            // eglSwapBuffers(egl_display, egl_surface);
+            varm_menu_render_overlay(selected_item);
 
             usleep(16666); // Lock menu rendering to a clean ~60 FPS update rhythm
         }
@@ -304,8 +307,12 @@ fclose(file);
             actual_cycles++;
 
             if (actual_cycles % 500000 == 0) {
-                printf("\r[TRANSLATOR] Executing Aperture Reconstructed Blocks... Cycles: %lu   ", actual_cycles);
+                printf("\r[TRANSLATOR] Executing Blocks... Cycles: %lu   ", actual_cycles);
                 fflush(stdout);
+            }
+
+            if (gxm_interface.clear_screen) {
+                gxm_interface.clear_screen(0.1f, 0.1f, 0.1f, 1.0f);
             }
 
             // 2. TIMED HOTKEY HOCK: Check if user is holding the Menu button down
@@ -321,10 +328,6 @@ fclose(file);
             } else {
                 menu_button_hold_timer = 0; // Reset counter if released
             }
-
-            // GAME RENDERING PASSTHROUGH: Execute GXM queue parsing
-            // This pulls intercepted GXM render parameters and routes them to your graphics hardware
-            // hle_gxm_flush_render_queue();
 
             usleep(10);
         }

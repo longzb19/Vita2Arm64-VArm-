@@ -17,6 +17,7 @@ add_executable(varm
     src/varm_graphics.c         # <-- Added here
     src/varm_cheats.c           # <-- Added here
     src/varm_system.c           # <-- Added here
+    src/varm_gxm_backend.c
     varm-gxm/src/hle/gxm.c
 )
 
