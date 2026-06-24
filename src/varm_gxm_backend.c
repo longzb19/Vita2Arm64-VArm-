@@ -61,5 +61,3 @@ static int gles_submit_cmd(uint32_t cmd_vaddr, uint32_t size) {
 
     return 0;
 }
-
-// ... Keep your Vulkan fallback initialization code exactly the same ...

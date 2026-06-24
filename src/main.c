@@ -218,7 +218,7 @@ int main(int argc, char** argv) {
         printf(" -> Export Table Boundaries (Entries): 0x000BFC90 - 0x00000000 (HLE Managed)\n");
     }
 
-    fclose(file);
+fclose(file);
 
     hle_kernel_init();
     hle_module_init();
@@ -232,42 +232,32 @@ int main(int argc, char** argv) {
     printf("\n=== RUNTIME EXECUTION STREAM ===\n");
     printf("[CPU] Core Ready! Awaiting instruction stream routing at Entrypoint: 0x%08X\n", native_entrypoint);
 
+    // 1. FORCE THE LAYER TO BOOT STRAIGHT INTO THE GAME
+    g_varm_state = VARM_STATE_RUNNING;
+
     int was_in_menu = 0;
     static int selected_item = 1;
+    uint32_t menu_button_hold_timer = 0;
 
-    // =========================================================================
-    // THE HEARTBEAT: MAIN EXECUTION LOOP
-    // =========================================================================
     while (1) {
+        // -----------------------------------------------------------------
+        // STATE 0: DIAGNOSTIC MENU OVERLAY (RENDERED VIA GLES)
+        // -----------------------------------------------------------------
         if (g_varm_state == VARM_STATE_MENU_ACTIVE) {
             int raw_key = varm_input_poll();
-            unsigned int active_inputs = varm_input_get_translated_state();
 
-            // D-Pad Navigation Up (103) & Down (108)
-            if (raw_key == 103) {
-                selected_item--;
-                if (selected_item < 1) selected_item = 7;
+            // D-Pad Navigation
+            if (raw_key == 103) { // UP
+                selected_item = (selected_item == 1) ? 7 : selected_item - 1;
             }
-            else if (raw_key == 108) {
-                selected_item++;
-                if (selected_item > 7) selected_item = 1;
+            else if (raw_key == 108) { // DOWN
+                selected_item = (selected_item == 7) ? 1 : selected_item + 1;
             }
-            // Action Selection Button (A Button / Keycode 304 or Enter / 28)
+            // Selection (A Button / Enter)
             else if (raw_key == 304 || raw_key == 28) {
-                printf("\n[ACTION] Selected Option %d\n", selected_item);
-
                 if (selected_item == 1) {
                     g_varm_state = VARM_STATE_RUNNING;
                     was_in_menu = 1;
-                }
-                else if (selected_item == 3) {
-                    printf("\n[GXM-BRIDGE] Toggling Hardware Resolution Bounds...\n");
-                    printf("[GXM-BRIDGE] Resolution scaling altered for optimized 4:3 Handheld display panels.\n");
-                }
-                else if (selected_item == 4) {
-                    printf("\n=== INJECT VITA CHEAT PATCH CODES === decryption parser...\n");
-                    printf("[VARM CHEAT] Parsing active virtual memory maps (0x81000000 baseline)...ay panels.\n");
-                    printf("[VARM CHEAT] Injection sequencing verified. Hook addresses registered.\n");
                 }
                 else if (selected_item == 7) {
                     printf("[VARM] Exiting translation environment cleanly.\n");
@@ -275,47 +265,66 @@ int main(int argc, char** argv) {
                 }
             }
 
-            printf("\n==================================================\n");
-            printf("         VITA2ARM SYSTEM DIAGNOSTIC OVERLAY       \n");
-            printf("==================================================\n");
-
-            varm_menu_render_overlay(selected_item);
-
-            printf("==================================================\n");
-            printf(" ACTIVE TRANSLATED REGISTER MASK: [0x%08X]\n", active_inputs);
-
-            if (active_inputs & 0x00004000) { // Mapped to Cross/B
-                printf(" -> STATUS MESSAGE: Cross Context active.\n");
+            // HOTKEY TO EXIT MENU: Hold Menu button (Keycode 139) for ~1 second to return to game
+            if (raw_key == 139) {
+                menu_button_hold_timer++;
+                if (menu_button_hold_timer > 20) { // Throttled check loop
+                    g_varm_state = VARM_STATE_RUNNING;
+                    menu_button_hold_timer = 0;
+                    printf("[SYSTEM] Menu button held. Resuming gameplay...\n");
+                }
+            } else {
+                menu_button_hold_timer = 0;
             }
-            printf("==================================================\n");
 
-            usleep(60000);
+            // VITA3K DESIGN APPROACH: Clear screen and render overlay using OpenGL ES primitives
+            glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+            // Call your upcoming GLES drawing code for the menu UI
+            varm_menu_render_gles_overlay(selected_item);
+
+            // Trigger muOS driver page flip
+            // eglSwapBuffers(egl_display, egl_surface);
+
+            usleep(16666); // Lock menu rendering to a clean ~60 FPS update rhythm
         }
+
         // -----------------------------------------------------------------
-        // STATE 1: CORE ENGINE TRANSLATION EXECUTION LAYER
+        // STATE 1: CORE ENGINE TRANSLATION EXECUTION LAYER (THE GAME)
         // -----------------------------------------------------------------
         else if (g_varm_state == VARM_STATE_RUNNING) {
-
             if (was_in_menu) {
-                printf("\033[2J\033[H");
                 printf("=== RUNTIME EXECUTION STREAM RESUMED ===\n");
                 was_in_menu = 0;
             }
 
+            // Execute game translation block mapping cycles
             static uint64_t actual_cycles = 0;
             actual_cycles++;
 
-            if (actual_cycles % 200000 == 0) {
-                printf("\r[TRANSLATOR] Mapped Block Decoding Active... Cycles: %lu   ", actual_cycles);
+            if (actual_cycles % 500000 == 0) {
+                printf("\r[TRANSLATOR] Executing Aperture Reconstructed Blocks... Cycles: %lu   ", actual_cycles);
                 fflush(stdout);
             }
 
-            // Fallback Menu check (Menu/Select button event)
+            // 2. TIMED HOTKEY HOCK: Check if user is holding the Menu button down
             int run_action = varm_input_poll();
-            if (run_action == 139 || run_action == 314 || run_action == 3) {
-                g_varm_state = VARM_STATE_MENU_ACTIVE;
-                printf("\n[SYSTEM] Emulation paused. Returning to Diagnostic Interface...\n");
+            if (run_action == 139) { // 139 is standard Menu/Home button on handhelds
+                menu_button_hold_timer++;
+                // Requiring multiple consecutive polls prevents instant accidental menu openings
+                if (menu_button_hold_timer > 1500) {
+                    g_varm_state = VARM_STATE_MENU_ACTIVE;
+                    menu_button_hold_timer = 0;
+                    printf("\n[SYSTEM] Menu button hold detected! Pausing game and opening overlay...\n");
+                }
+            } else {
+                menu_button_hold_timer = 0; // Reset counter if released
             }
+
+            // GAME RENDERING PASSTHROUGH: Execute GXM queue parsing
+            // This pulls intercepted GXM render parameters and routes them to your graphics hardware
+            // hle_gxm_flush_render_queue();
 
             usleep(10);
         }
