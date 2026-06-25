@@ -4,16 +4,16 @@
 
 // Local implementations of vital functions God of War needs to avoid crashing
 void mock_sceKernelCreateThread(void) {
-    printf("[HLE INTERCEPT] -> sceKernelCreateThread executed! Allocating guest thread context safely.\\n");
+    printf("[HLE INTERCEPT] -> sceKernelCreateThread executed! Allocating guest thread context safely.\n");
 }
 
 void mock_sceCtrlPeekBufferPositive(void) {
     // This will eventually link directly into our varm_input pipeline!
-    // printf("[HLE INTERCEPT] -> polling controller inputs natively.\\n");
+    // printf("[HLE INTERCEPT] -> polling controller inputs natively.\n");
 }
 
 void mock_sceGxmInitialize(void) {
-    printf("[HLE INTERCEPT] -> sceGxmInitialize called! Initializing GXM-to-GLES Command Buffer mapping.\\n");
+    printf("[HLE INTERCEPT] -> sceGxmInitialize called! Initializing GXM-to-GLES Command Buffer mapping.\n");
 }
 
 // Map the functions belonging to SceKernelThreadMgr
@@ -59,10 +59,11 @@ void hle_module_init(void) {
         .hook_count = sizeof(gxm_hooks) / sizeof(gxm_hooks[0])
     };
 
-    printf("[HLE MODULE] Hook engine initialized. %d master SONY system modules indexed.\\n", s_registered_module_count);
+    printf("[HLE MODULE] Hook engine initialized. %d master SONY system modules indexed.\n", s_registered_module_count);
 }
 
-int hle_module_resolve_import(const char* module_name, const char* func_name, uint32_t nid) {
+// Resolves and passes back the pointer address instead of running it immediately
+HleHostFn hle_module_resolve_import(const char* module_name, const char* func_name, uint32_t nid) {
     for (int i = 0; i < s_registered_module_count; i++) {
         if (strcmp(s_module_registry[i].module_name, module_name) == 0) {
             for (int j = 0; j < s_module_registry[i].hook_count; j++) {
@@ -70,16 +71,15 @@ int hle_module_resolve_import(const char* module_name, const char* func_name, ui
                 if ((func_name && strcmp(s_module_registry[i].hooks[j].function_name, func_name) == 0) ||
                     s_module_registry[i].hooks[j].nid == nid) {
 
-                    // Run the native execution logic!
-                    s_module_registry[i].hooks[j].host_implementation();
-                    return 1; // Resolved perfectly
+                    // Return the host function pointer seamlessly!
+                    return s_module_registry[i].hooks[j].host_implementation;
                 }
             }
         }
     }
 
-    // Capture unhandled imports elegantly instead of hard crashing
-    printf("[HLE WARNING] Unhandled SONY Import Requested! Module: %s | Func: %s | NID: 0x%08X\\n",
+    // Capture unhandled imports safely without executing an illegal nullptr jump
+    printf("[HLE MODULE WARNING] Unhandled import: %s -> %s (NID: 0x%08X)\n",
            module_name, func_name ? func_name : "UNKNOWN", nid);
-    return 0; // Not implemented yet
+    return NULL;
 }
