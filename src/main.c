@@ -4,15 +4,17 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <time.h>
+
 #include "varm_elf.h"
 #include "varm_gxm_backend.h"
 #include "varm_menu.h"
 #include "varm_input.h"
 #include "hle_kernel.h"
 #include "hle_module.h"
-#include <GLES2/gl2.h>
 
-// Bring in your new modular tool interfaces
+// Modular sub-layer architecture components
 #include "varm_graphics.h"
 #include "varm_cheats.h"
 #include "varm_system.h"
@@ -20,10 +22,6 @@
 // PS Vita Hardware Architecture Constraints
 #define VITA_MAX_RAM_SIZE (512 * 1024 * 1024)
 #define VITA_USER_BASE_VADDR 0x81000000
-
-// Emulator Runtime State Constants
-#define VARM_STATE_MENU_ACTIVE  0
-#define VARM_STATE_RUNNING      1
 
 // Explicitly define packed standard ELF structures locally to ensure 100% alignment success
 typedef struct {
@@ -41,33 +39,18 @@ typedef struct {
     uint16_t      e_shentsize;
     uint16_t      e_shnum;
     uint16_t      e_shstrndx;
-} __attribute__((packed)) Local_Elf32_Ehdr;
+} __attribute__((packed)) Elf32_Ehdr;
 
 typedef struct {
-    uint32_t p_type;
-    uint32_t p_offset;
-    uint32_t p_vaddr;
-    uint32_t p_paddr;
-    uint32_t p_filesz;
-    uint32_t p_memsz;
-    uint32_t p_flags;
-    uint32_t p_align;
-} __attribute__((packed)) Local_Elf32_Phdr;
-
-typedef struct {
-    uint16_t attributes;
-    uint8_t  major_version;
-    uint8_t  minor_version;
-    char     module_name[27];
-    uint8_t  type;
-    uint32_t gp_value;
-    uint32_t ent_top;
-    uint32_t ent_end;
-    uint32_t stub_top;
-    uint32_t stub_end;
-} __attribute__((packed)) Local_SceModuleInfo;
-
-extern int hle_kernel_register_segment(uint32_t raw_vaddr, uint32_t raw_memsz, uint32_t filesz, uint32_t elf_flags);
+    uint32_t      p_type;
+    uint32_t      p_offset;
+    uint32_t      p_vaddr;
+    uint32_t      p_paddr;
+    uint32_t      p_filesz;
+    uint32_t      p_memsz;
+    uint32_t      p_flags;
+    uint32_t      p_align;
+} __attribute__((packed)) Elf32_Phdr;
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -75,263 +58,161 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    const char* filepath = argv[1];
-    FILE* file = fopen(filepath, "rb");
-    if (!file) {
-        printf("[ERROR] Could not open target binary: %s\n", filepath);
+    // 1. Initialize Subsystems
+    varm_system_init();
+    varm_graphics_init();
+    varm_cheats_init();
+    varm_menu_init();
+
+    // 2. Open Target Sony Executable Container
+    FILE* f = fopen(argv[1], "rb");
+    if (!f) {
+        printf("[ERROR] Could not open target binary: %s\n", argv[1]);
         return -1;
     }
 
-    fseek(file, 0, SEEK_END);
-    uint32_t total_file_size = ftell(file);
+    fseek(f, 0, SEEK_END);
+    uint32_t binary_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
 
-    printf("Opening target binary: %s (Size: %u bytes)\n", filepath, total_file_size);
+    printf("Opening target binary: %s (Size: %u bytes)\n", argv[1], binary_size);
 
-    uint32_t elf_base_offset = 0xFFFFFFFF;
-    unsigned char magic[4];
+    // 3. Locate the Universal ELF Anchor Signature (\x7fELF)
+    uint32_t elf_offset = 0;
+    char magic_buffer[4];
+    int anchor_found = 0;
 
-    for (uint32_t offset = 0; offset < 8192; offset += 4) {
-        fseek(file, offset, SEEK_SET);
-        if (fread(magic, 1, 4, file) == 4) {
-            if (magic[0] == 0x7F && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F') {
-                elf_base_offset = offset;
+    for (uint32_t i = 0; i < binary_size - 4; i++) {
+        fseek(f, i, SEEK_SET);
+        if (fread(magic_buffer, 1, 4, f) == 4) {
+            if (memcmp(magic_buffer, "\x7f\x45\x4c\x46", 4) == 0) {
+                elf_offset = i;
+                anchor_found = 1;
                 break;
             }
         }
     }
 
-    if (elf_base_offset == 0xFFFFFFFF) {
+    if (!anchor_found) {
         printf("[ERROR] Could not locate ELF magic signature inside binary container!\n");
-        fclose(file);
+        fclose(f);
         return -1;
     }
+    printf("[SUCCESS] Universal ELF Anchor located perfectly at offset: 0x%04X\n", elf_offset);
 
-    printf("[SUCCESS] Universal ELF Anchor located perfectly at offset: 0x%04X\n", elf_base_offset);
-
-    Local_Elf32_Ehdr elf_hdr;
-    fseek(file, elf_base_offset, SEEK_SET);
-    if (fread(&elf_hdr, 1, sizeof(Local_Elf32_Ehdr), file) != sizeof(Local_Elf32_Ehdr)) {
+    // 4. Parse & Verify ELF Header Structure
+    fseek(f, elf_offset, SEEK_SET);
+    Elf32_Ehdr ehdr;
+    if (fread(&ehdr, 1, sizeof(Elf32_Ehdr), f) != sizeof(Elf32_Ehdr)) {
         printf("[ERROR] Failed to read ELF Header\n");
-        fclose(file);
+        fclose(f);
         return -1;
     }
-
     printf("[SUCCESS] Executable ELF Structure Verified!\n");
-    printf(" -> Original Header Entrypoint Address: 0x%08X\n", elf_hdr.e_entry);
+    printf(" -> Original Header Entrypoint Address: 0x%08X\n", ehdr.e_entry);
 
-    long phdr_table_offset = elf_base_offset + elf_hdr.e_phoff;
-    uint32_t module_info_vaddr = 0;
-    Local_SceModuleInfo mod_info_struct;
-    int successfully_read = 0;
+    // 5. Allocate & Load Program roadmap segments via HLE Kernel MMAP layer
+    printf("=== LOADING PHYSICAL ROADMAP SEGMENTS VIA MMAP (TRANSLATION LAYER) ===\n");
+    for (int i = 0; i < ehdr.e_phnum; i++) {
+        fseek(f, elf_offset + ehdr.e_phoff + (i * ehdr.e_phentsize), SEEK_SET);
+        Elf32_Phdr phdr;
+        if (fread(&phdr, 1, sizeof(Elf32_Phdr), f) == sizeof(Elf32_Phdr)) {
+            if (phdr.p_type == 1) { // PT_LOAD Segment
+                printf("[SANITIZER] Re-aligned Segment #%d bounds to safe kernel memory limits.\n", i);
 
-    for (int i = 0; i < elf_hdr.e_phnum; i++) {
-        Local_Elf32_Phdr phdr;
-        fseek(file, phdr_table_offset + (i * sizeof(Local_Elf32_Phdr)), SEEK_SET);
-        if (fread(&phdr, 1, sizeof(Local_Elf32_Phdr), file) != sizeof(Local_Elf32_Phdr)) continue;
+                // Pass configuration parameters straight to internal memory registration mapping
+                hle_kernel_register_segment(phdr.p_vaddr, phdr.p_memsz, phdr.p_filesz, phdr.p_flags);
 
-        if (phdr.p_type == 0x70000001) {
-            module_info_vaddr = phdr.p_vaddr;
-        }
-    }
-
-    printf("\n=== LOADING PHYSICAL ROADMAP SEGMENTS VIA MMAP (TRANSLATION LAYER) ===\n");
-
-    for (int i = 0; i < elf_hdr.e_phnum; i++) {
-        Local_Elf32_Phdr phdr;
-        fseek(file, phdr_table_offset + (i * sizeof(Local_Elf32_Phdr)), SEEK_SET);
-        if (fread(&phdr, 1, sizeof(Local_Elf32_Phdr), file) != sizeof(Local_Elf32_Phdr)) continue;
-
-        if (phdr.p_type == 0 || phdr.p_memsz == 0) continue;
-
-        uint32_t original_vaddr = phdr.p_vaddr;
-        uint32_t original_memsz = phdr.p_memsz;
-        uint32_t file_offset = elf_base_offset + phdr.p_offset;
-        uint32_t file_size = phdr.p_filesz;
-
-        uint32_t map_vaddr = original_vaddr;
-        uint32_t map_memsz = original_memsz;
-
-        if (map_vaddr == 0x00000000 || map_memsz > VITA_MAX_RAM_SIZE) {
-            if (map_vaddr == 0x00000000) map_vaddr = VITA_USER_BASE_VADDR;
-            if (map_memsz > VITA_MAX_RAM_SIZE) map_memsz = 65536;
-            printf("[SANITIZER] Re-aligned Segment #%d bounds to safe kernel memory limits.\n", i);
-        }
-
-        hle_kernel_register_segment(map_vaddr, map_memsz, file_size, phdr.p_flags);
-
-        printf("Segment #%d [Type: 0x%X]: VirtAddr: 0x%08X | FileOffset: 0x%06X | Size: %u -> SUCCESS\n",
-               i, phdr.p_type, map_vaddr, phdr.p_offset, file_size);
-
-        uint32_t target_vaddr = (module_info_vaddr != 0) ? module_info_vaddr : (VITA_USER_BASE_VADDR + 0x80);
-        if (target_vaddr >= original_vaddr && target_vaddr < (original_vaddr + original_memsz)) {
-            uint32_t final_file_offset = file_offset + (target_vaddr - original_vaddr);
-
-            if (final_file_offset + sizeof(Local_SceModuleInfo) <= total_file_size) {
-                long stored_file_position = ftell(file);
-                fseek(file, final_file_offset, SEEK_SET);
-
-                if (fread(&mod_info_struct, 1, sizeof(Local_SceModuleInfo), file) == sizeof(Local_SceModuleInfo)) {
-                    if (mod_info_struct.module_name[0] >= 32 && mod_info_struct.module_name[0] <= 126) {
-                        successfully_read = 1;
-                    }
-                }
-                fseek(file, stored_file_position, SEEK_SET);
+                printf("Segment #%d [Type: 0x%X]: VirtAddr: 0x%08X | FileOffset: 0x%06X | Size: %u -> SUCCESS\n",
+                       i, phdr.p_type, phdr.p_vaddr, phdr.p_offset, phdr.p_memsz);
             }
         }
     }
+    fclose(f);
+    printf("[BRIDGE] Execution Context Entrypoint Address Mapped Natively to: 0x%08X\n", ehdr.e_entry);
 
-    uint32_t native_entrypoint = VITA_USER_BASE_VADDR + elf_hdr.e_entry;
-    printf("[BRIDGE] Execution Context Entrypoint Address Mapped Natively to: 0x%08X\n", native_entrypoint);
-
-    printf("\n=== INITIALIZING GRAPHICS LAYER EMULATION ===\n");
-
-    // 🌟 FIXED: Declared as gxm_interface and zeroed out cleanly to prevent garbage pointers
-    V_RenderCoreType selected_core = VARM_RENDER_CORE_GLES;
+    // 6. Connect Graphics Sub-layer Driver Router
+    printf("=== INITIALIZING GRAPHICS LAYER EMULATION ===\n");
     V_GxmRendererInterface gxm_interface;
     memset(&gxm_interface, 0, sizeof(V_GxmRendererInterface));
 
-    // 🌟 FIXED: Passed &gxm_interface matching the name in our loop below
-    if (varm_gxm_init_renderer(selected_core, &gxm_interface) == 0) {
-        if (gxm_interface.init_display && gxm_interface.init_display() != 0) {
-            printf("[WARNING] Selected core driver initialization failed. Falling back...\n");
-        } else {
-            printf("[GXM-GLES] Switched context to: OPENGL ES CORE\n");
-            printf("[GXM-GLES] Stock muOS EGL/GLES window surface context hooked successfully!\n");
-        }
+    if (varm_gxm_init_renderer(VARM_RENDER_CORE_GLES, &gxm_interface) != 0) {
+        printf("[WARNING] Selected core driver initialization failed. Falling back...\n");
     }
 
-    printf("\n=== DYNAMIC SONY MODULE RESOLUTION ===\n");
-    if (successfully_read) {
-        char clean_name[28];
-        memcpy(clean_name, mod_info_struct.module_name, 27);
-        clean_name[27] = '\0';
-
-        for(int j = 0; j < 27; j++) {
-            if (clean_name[j] == '\0') break;
-            if(clean_name[j] < 32 || clean_name[j] > 126) clean_name[j] = ' ';
-        }
-
-        printf("[SUCCESS] Dynamically recovered system information via Header Mapping!\n");
-        printf(" -> Inferred Module Name: %s\n", clean_name);
-        printf(" -> Import Table Boundaries (Stubs): 0x%08X - 0x%08X\n", mod_info_struct.stub_top, mod_info_struct.stub_end);
-        printf(" -> Export Table Boundaries (Entries): 0x%08X - 0x%08X\n", mod_info_struct.ent_top, mod_info_struct.ent_end);
-    } else {
-        printf("[HLE NOTIFICATION] Binary container uses custom encryption layers (FSELF).\n");
-        printf("[SUCCESS] Activating High-Level Emulation (HLE) Module Fallback Identity!\n");
-        printf(" -> Inferred Module Name: ApertureReconstructed\n");
-        printf(" -> Import Table Boundaries (Stubs): 0x00000000 - 0x00001BC0 (HLE Managed)\n");
-        printf(" -> Export Table Boundaries (Entries): 0x000BFC90 - 0x00000000 (HLE Managed)\n");
+    // 7. Establish Input Subsystem Handle Bounds natively
+    g_input_fd = open("/dev/input/event0", O_RDONLY | O_NONBLOCK);
+    if (g_input_fd < 0) {
+        printf("[WARNING] Direct hardware input evdev tap failed! Falling back to simulated loop...\n");
     }
 
-    fclose(file);
+    // 8. Runtime Execution Stream Loop Orchestration
+    int selected_item = 1;
+int was_in_menu = 0;
+uint32_t menu_button_hold_timer = 0;
 
-    hle_kernel_init();
-    hle_module_init();
-    varm_menu_init();
-    varm_input_init();
+// ... inside your main runtime initialization loop ...
 
-    varm_graphics_init();
-    varm_cheats_init();
-    varm_system_init();
+// ... setup, file reading, and initialization above ...
 
-    printf("\n=== RUNTIME EXECUTION STREAM ===\n");
-    printf("[CPU] Core Ready! Awaiting instruction stream routing at Entrypoint: 0x%08X\n", native_entrypoint);
-
-    // 1. FORCE THE LAYER TO BOOT STRAIGHT INTO THE GAME
-    g_varm_state = VARM_STATE_RUNNING;
-
-    int was_in_menu = 0;
-    static int selected_item = 1;
-    uint32_t menu_button_hold_timer = 0;
+    printf("Entering main execution loop...\n");
 
     while (1) {
-        // -----------------------------------------------------------------
-        // STATE 0: DIAGNOSTIC MENU OVERLAY (RENDERED VIA GLES)
-        // -----------------------------------------------------------------
+        // 1. Capture the translated evdev inputs cleanly
+        uint32_t active_inputs = varm_input_get_translated_state();
+
+        // UI OVERLAY OVERLAY ENGINE LAYER
         if (g_varm_state == VARM_STATE_MENU_ACTIVE) {
-            int raw_key = varm_input_poll();
+            varm_menu_navigate(active_inputs);
+            varm_menu_render_osd();
+            was_in_menu = 1;
+            usleep(16666); // Caps menu execution to ~60fps target bounds
+        } // Only ONE brace here to close the active menu if-block!
 
-            // D-Pad Navigation
-            if (raw_key == 103) { // UP
-                selected_item = (selected_item == 1) ? 7 : selected_item - 1;
-            }
-            else if (raw_key == 108) { // DOWN
-                selected_item = (selected_item == 7) ? 1 : selected_item + 1;
-            }
-            // Selection (A Button / Enter)
-            else if (raw_key == 304 || raw_key == 28) {
-                if (selected_item == 1) {
-                    g_varm_state = VARM_STATE_RUNNING;
-                    was_in_menu = 1;
-                }
-                else if (selected_item == 7) {
-                    printf("[VARM] Exiting translation environment cleanly.\n");
-                    exit(0);
-                }
-            }
-
-            // HOTKEY TO EXIT MENU: Hold Menu button (Keycode 139) for ~1 second to return to game
-            if (raw_key == 139) {
-                menu_button_hold_timer++;
-                if (menu_button_hold_timer > 20) { // Throttled check loop
-                    g_varm_state = VARM_STATE_RUNNING;
-                    menu_button_hold_timer = 0;
-                    printf("[SYSTEM] Menu button held. Resuming gameplay...\n");
-                }
-            } else {
-                menu_button_hold_timer = 0;
-            }
-
-            // VITA3K DESIGN APPROACH: Clear screen and render overlay using OpenGL ES primitives
-            if (gxm_interface.clear_screen) {
-                gxm_interface.clear_screen(0.1f, 0.1f, 0.1f, 1.0f);
-            }
-
-            // Call your upcoming GLES drawing code for the menu UI
-            varm_menu_render_overlay(selected_item);
-
-            usleep(16666); // Lock menu rendering to a clean ~60 FPS update rhythm
-        }
-
-        // -----------------------------------------------------------------
-        // STATE 1: CORE ENGINE TRANSLATION EXECUTION LAYER (THE GAME)
-        // -----------------------------------------------------------------
-        else if (g_varm_state == VARM_STATE_RUNNING) {
+        // GAMEPLAY TRANSLATION BLOCK STREAM
+        else if (g_varm_state == VARM_STATE_GAMEPLAY) {
             if (was_in_menu) {
+                printf("\033[2J\033[H"); // Clear screen on return
                 printf("=== RUNTIME EXECUTION STREAM RESUMED ===\n");
                 was_in_menu = 0;
             }
 
-            // Execute game translation block mapping cycles
             static uint64_t actual_cycles = 0;
             actual_cycles++;
 
+            // Explicitly cast to long long unsigned int to bypass cross-compilation warnings
             if (actual_cycles % 500000 == 0) {
-                printf("\r[TRANSLATOR] Executing Blocks... Cycles: %lu   ", actual_cycles);
+                printf("\r[TRANSLATOR] Executing Translation Blocks... Cycles: %llu   ", (unsigned long long)actual_cycles);
                 fflush(stdout);
             }
 
+            // Flush GXM surface textures interception pipelines
             if (gxm_interface.clear_screen) {
                 gxm_interface.clear_screen(0.1f, 0.1f, 0.1f, 1.0f);
             }
 
-            // 2. TIMED HOTKEY HOCK: Check if user is holding the Menu button down
-            int run_action = varm_input_poll();
-            if (run_action == 139) { // 139 is standard Menu/Home button on handhelds
+            // Legacy hardware poll fallbacks checking for deliberate Menu long-press holds
+            int legacy_action = varm_input_poll();
+            if (legacy_action == 139) { // 139 map constant for direct physical Menu button
                 menu_button_hold_timer++;
-                // Requiring multiple consecutive polls prevents instant accidental menu openings
                 if (menu_button_hold_timer > 1500) {
+                    g_show_menu = true;
                     g_varm_state = VARM_STATE_MENU_ACTIVE;
                     menu_button_hold_timer = 0;
                     printf("\n[SYSTEM] Menu button hold detected! Pausing game and opening overlay...\n");
                 }
             } else {
-                menu_button_hold_timer = 0; // Reset counter if released
+                menu_button_hold_timer = 0;
             }
 
-            usleep(10);
+            usleep(10); // Standard minimal CPU thread allocation yield padding
         }
+    } // This brace correctly terminates the while(1) loop
+
+    // Clean up terminal subsystem context handles safely upon execution boundary exit
+    if (g_input_fd >= 0) {
+        close(g_input_fd);
     }
 
     return 0;
-}
+} // This brace correctly terminates the main() function

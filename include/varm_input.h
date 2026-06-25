@@ -1,6 +1,9 @@
 #ifndef VARM_INPUT_H
 #define VARM_INPUT_H
 
+#include <stdint.h>
+#include <stdbool.h>
+
 // 🎮 RG35XX H Physical Hardware Linux Evdev Key Codes
 #define HW_KEY_UP       103
 #define HW_KEY_DOWN     108
@@ -32,18 +35,19 @@ typedef enum {
     VITA_CTRL_CIRCLE      = 0x00002000,
     VITA_CTRL_CROSS       = 0x00004000,
     VITA_CTRL_SQUARE      = 0x00008000
-} VitaButtonMasks;
+} VitaControlMasks;
 
-// 🛠️ Layout mapping structural definition
 typedef struct {
-    int physical_code;
-    unsigned int vita_mask;
-    const char *button_name;
+    int hw_code;
+    uint32_t vita_mask;
+    const char* name;
 } ControlMap;
 
-// ⚙️ Core Input Processing Engine Functions
-void varm_input_init(void);
-unsigned int varm_input_get_translated_state(void);
+// 🌟 Global input state contexts shared across modules
+extern bool g_show_menu;
+extern int g_input_fd;
+
+uint32_t varm_input_get_translated_state(void);
 int varm_input_poll(void);
 
-#endif
+#endif // VARM_INPUT_H

@@ -2,6 +2,7 @@
 #define VARM_MENU_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 typedef enum {
     VARM_STATE_GAMEPLAY,
@@ -21,6 +22,8 @@ typedef enum {
 extern VarmRuntimeState g_varm_state;
 
 void varm_menu_init(void);
+void varm_menu_navigate(uint32_t inputs);
+void varm_menu_render_osd(void);
 void varm_menu_handle_inputs(int key_code, bool pressed);
 void varm_menu_render_overlay(int selected);
 

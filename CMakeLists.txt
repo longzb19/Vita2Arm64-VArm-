@@ -7,19 +7,18 @@ set(CMAKE_C_STANDARD 11)
 include_directories(include)
 include_directories(varm-gxm/include)
 
-# Look for your executable target configuration and add the new file:
+# Unified target structure
 add_executable(varm
     src/main.c
     src/hle_kernel.c
-    src/hle_module.c             # <-- Drop our new modular registry framework here
+    src/hle_module.c
     src/varm_menu.c
     src/varm_input.c
-    src/varm_graphics.c         # <-- Added here
-    src/varm_cheats.c           # <-- Added here
-    src/varm_system.c           # <-- Added here
+    src/varm_graphics.c
+    src/varm_cheats.c
+    src/varm_system.c
     src/varm_gxm_backend.c
-    varm-gxm/src/hle/gxm.c
 )
 
-# Crucial: This links the system loader library so dlopen works flawlessly on ARM64 Linux
-target_link_libraries(varm ${CMAKE_DL_LIBS})
+# Link dynamic loading hooks and explicit OpenGL ES 2.0 graphics libraries safely
+target_link_libraries(varm ${CMAKE_DL_LIBS} GLESv2)

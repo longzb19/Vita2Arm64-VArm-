@@ -5,95 +5,79 @@
 #include "varm_gxm_backend.h"
 #include <GLES2/gl2.h>
 
-// Dynamic function pointers to native system GLES drivers
 static void (*gl_draw_arrays_ptr)(GLenum mode, GLint first, GLsizei count) = NULL;
 static void (*gl_bind_texture_ptr)(GLenum target, GLuint texture) = NULL;
+static void (*gl_clear_color_ptr)(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha) = NULL;
+static void (*gl_clear_ptr)(GLbitfield mask) = NULL;
 
 static int gles_init_display(void) {
-    printf("[GXM-GLES] Initializing stock muOS EGL/GLES2 context...\n");
+    printf("[GXM-GLES] Hooking native muOS GLES reference driver layers...\n");
 
     void* gles_lib = dlopen("libGLESv2.so", RTLD_NOW | RTLD_GLOBAL);
     if (!gles_lib) {
-        printf("[GXM-GLES-ERROR] Failed to tap into system libGLESv2.so!\n");
+        printf("[GXM-GLES-ERROR] Target driver link hook libGLESv2.so failed!\n");
         return -1;
     }
 
-    // Bind real GLES backend functions through our wrapper link layer
     gl_draw_arrays_ptr = dlsym(gles_lib, "glDrawArrays");
     gl_bind_texture_ptr = dlsym(gles_lib, "glBindTexture");
+    gl_clear_color_ptr = dlsym(gles_lib, "glClearColor");
+    gl_clear_ptr = dlsym(gles_lib, "glClear");
 
-    printf("[GXM-GLES] Stock GLES Driver methods bound successfully!\n");
+    printf("[GXM-GLES] System dynamic GLES hooks bound successfully!\n");
     return 0;
 }
 
 static int gles_allocate_surface(GxmSurfaceContext *surface) {
-    // Generate native texture bindings for the incoming Vita virtual frame buffers
-    printf("[GXM-GLES] Mapping GXM surface (0x%08X) to GLES texture generation...\n", surface->vaddr);
-
-    GLuint tex_id;
-    // Real deployment step: call actual GL function through our dlsym pointers
-    // glGenTextures(1, &tex_id);
-
+    printf("[GXM-GLES] Mapping internal virtual GXM Surface (Vaddr: 0x%08X) to GLES Texture mapping...\n", surface->vaddr);
     return 0;
 }
 
 static int gles_submit_cmd(uint32_t cmd_vaddr, uint32_t size) {
-    // 3. VITA3K ARTIFACT RENDERING WRAPPER APPROACH
-    // This is where we parse native Vita GXM drawing tokens into standard GLES draw calls.
-    // For now, we stub an interceptor loop to catch drawing operations safely.
-
     uint32_t* cmd_buffer = (uint32_t*)(uintptr_t)cmd_vaddr;
-
     if (!cmd_buffer) return -1;
 
-    // Example translation parsing block
     uint32_t gxm_op_code = cmd_buffer[0];
-    switch(gxm_op_code) {
-        case 0x000044AA: // Hypothetical Vita GXM Primitive Draw Command Token
-            if(gl_draw_arrays_ptr) {
-                // Translate coordinates, then issue real rendering dispatch to GPU
-                // gl_draw_arrays_ptr(GL_TRIANGLES, 0, 3);
-            }
-            break;
-        default:
-            break;
+    if (gxm_op_code == 0x000044AA && gl_draw_arrays_ptr) {
+        // Translation mapping would handle real execution loops here
     }
-
     return 0;
 }
 
-// 🌟 Add these Vulkan stubs to match your distributor core routing
+static void gles_clear_screen(float r, float g, float b, float a) {
+    if (gl_clear_color_ptr && gl_clear_ptr) {
+        gl_clear_color_ptr(r, g, b, a);
+        gl_clear_ptr(GL_COLOR_BUFFER_BIT);
+    }
+}
+
 static int vulkan_init_display(void) {
-    printf("[GXM-VULKAN-ERROR] Vulkan driver not present or unsupported on this muOS kernel!\n");
+    printf("[GXM-VULKAN-ERROR] Vulkan context loader unavailable.\n");
     return -1;
 }
 
-static int vulkan_allocate_surface(GxmSurfaceContext *surface) {
-    printf("[GXM-VULKAN] Creating VkImage view wrapper for Vaddr: 0x%08X\n", surface->vaddr);
-    return 0;
-}
+static int vulkan_allocate_surface(GxmSurfaceContext *surface) { return 0; }
+static int vulkan_submit_cmd(uint32_t cmd_vaddr, uint32_t size) { return 0; }
+static void vulkan_clear_screen(float r, float g, float b, float a) { }
 
-static int vulkan_submit_cmd(uint32_t cmd_vaddr, uint32_t size) {
-    // Maps GXM command chains into a native VkCommandBuffer record context
-    return 0;
-}
-
-// 🌟 Global Core Distributor Selector (Ensure this is NOT marked static)
+// Global Core Distributor Selector
 int varm_gxm_init_renderer(V_RenderCoreType core_type, V_GxmRendererInterface *interface) {
     if (!interface) return -1;
 
     if (core_type == VARM_RENDER_CORE_GLES) {
-        printf("[GXM-BRIDGE] Switched execution context to: OPENGL ES CORE\n");
+        printf("[GXM-BRIDGE] Switched execution context pipeline to: OPENGL ES CORE\n");
         interface->init_display           = gles_init_display;
         interface->allocate_surface       = gles_allocate_surface;
         interface->submit_command_buffer  = gles_submit_cmd;
+        interface->clear_screen           = gles_clear_screen; // 🌟 Now safely mapped!
         return 0;
     }
     else if (core_type == VARM_RENDER_CORE_VULKAN) {
-        printf("[GXM-BRIDGE] Switched execution context to: VULKAN CORE\n");
+        printf("[GXM-BRIDGE] Switched execution context pipeline to: VULKAN CORE\n");
         interface->init_display           = vulkan_init_display;
         interface->allocate_surface       = vulkan_allocate_surface;
         interface->submit_command_buffer  = vulkan_submit_cmd;
+        interface->clear_screen           = vulkan_clear_screen;
         return 0;
     }
     return -1;
