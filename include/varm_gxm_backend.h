@@ -17,13 +17,15 @@ typedef struct {
     int height;                 // Virtual surface viewport geometry height
 } GxmSurfaceContext;
 
-// Main GXM Renderer Distribution Interface
 typedef struct {
     int (*init_display)(void);
     int (*allocate_surface)(GxmSurfaceContext *surface);
     int (*submit_command_buffer)(uint32_t cmd_vaddr, uint32_t size);
     void (*clear_screen)(float r, float g, float b, float a);
 } V_GxmRendererInterface;
+
+// ADD THIS EXTERN DECLARATION
+extern V_GxmRendererInterface gxm_interface;
 
 int varm_gxm_init_renderer(V_RenderCoreType core_type, V_GxmRendererInterface *interface);
 

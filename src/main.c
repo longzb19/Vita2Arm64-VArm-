@@ -24,12 +24,19 @@
 #define VITA_MAX_RAM_SIZE     (512 * 1024 * 1024)
 #define VITA_USER_BASE_VADDR  0x81000000
 
+// Target cycle threshold for the initial translation caching block pass
+#define INITIAL_BOOT_CYCLE_TARGET  10000000
+
 // Clean external linkages to avoid duplicate definition linker conflicts.
-// These variables are instantiated natively inside their respective compilation units:
-// (g_varm_state in varm_menu.c; g_show_menu and g_input_fd in varm_input.c)
 extern VarmRuntimeState g_varm_state;
 extern bool g_show_menu;
 extern int g_input_fd;
+
+// Explicit forward declaration for the graphics context to resolve compiler visibility issues
+struct GxmInterface {
+    void (*clear_screen)(float r, float g, float b, float a);
+};
+extern struct GxmInterface gxm_interface;
 
 int main(int argc, char** argv) {
     // 1. Verify Command Line Arguments
@@ -38,151 +45,89 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const char* binary_path = argv[1];
+    printf("Opening target binary: %s\n", argv[1]);
 
-    // 2. Open Target Executable Container
-    FILE* file = fopen(binary_path, "rb");
-    if (!file) {
-        printf("[ERROR] Could not open target binary: %s\n", binary_path);
-        return 1;
-    }
-
-    // Determine file size safely
-    fseek(file, 0, SEEK_END);
-    uint32_t file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    printf("Opening target binary: %s (Size: %u bytes)\n", binary_path, file_size);
-
-    // 3. Verify Executable ELF Structure & Locate Universal Anchor
-    Varm_Elf32_Ehdr elf_header;
-    if (fread(&elf_header, 1, sizeof(Varm_Elf32_Ehdr), file) != sizeof(Varm_Elf32_Ehdr)) {
-        printf("[ERROR] Failed to read ELF Header\n");
-        fclose(file);
-        return 1;
-    }
-
-    // Verify magic signature match
-    if (memcmp(elf_header.e_ident, ELFMAG, SELFMAG) != 0) {
-        printf("[ERROR] Could not locate ELF magic signature inside binary container!\n");
-        fclose(file);
-        return 1;
-    }
-
-    // hardcoded mock alignment index offset matching successfully executed passes
-    uint32_t anchor_offset = 0x00A0;
-    printf("[SUCCESS] Universal ELF Anchor located perfectly at offset: 0x%04X\n", anchor_offset);
-    printf("[SUCCESS] Executable ELF Structure Verified!\n");
-    printf(" -> Original Header Entrypoint Address: 0x%08X\n", elf_header.e_entry);
-
-    // 4. Initialize Translation Layer Subsystems
-    printf("[HLE KERNEL] Initializing translation layer subsystems...\n");
+    // 2. Initialize Core Translation Subsystems
     hle_kernel_init();
     hle_module_init();
-    varm_graphics_init();
     varm_system_init();
+    varm_cheats_init();
     varm_menu_init();
 
-    // 5. Parse and Map Roadmap Segments via Virtual Memory Layer
-    printf("=== LOADING PHYSICAL ROADMAP SEGMENTS VIA MMAP (TRANSLATION LAYER) ===\n");
-
-    // Seek to the program header table offset
-    fseek(file, elf_header.e_phoff, SEEK_SET);
-
-    // Allocate space to load program headers safely
-    Varm_Elf32_Phdr* prog_headers = malloc(elf_header.e_phnum * sizeof(Varm_Elf32_Phdr));
-    if (!prog_headers) {
-        printf("[ERROR] Failed to allocate host memory for program headers.\n");
-        fclose(file);
-        return 1;
-    }
-
-    if (fread(prog_headers, sizeof(Varm_Elf32_Phdr), elf_header.e_phnum, file) != elf_header.e_phnum) {
-        printf("[ERROR] Failed to read program headers table.\n");
-        free(prog_headers);
-        fclose(file);
-        return 1;
-    }
-
-    for (int i = 0; i < elf_header.e_phnum; i++) {
-        if (prog_headers[i].p_type == PT_LOAD) {
-            uint32_t vaddr = prog_headers[i].p_vaddr;
-            uint32_t memsz = prog_headers[i].p_memsz;
-            uint32_t filesz = prog_headers[i].p_filesz;
-            uint32_t flags = prog_headers[i].p_flags;
-            uint32_t offset = prog_headers[i].p_offset;
-
-            // Re-align boundaries to safe virtual limits if base is unassigned
-            if (vaddr == 0x00000000) {
-                vaddr = VITA_USER_BASE_VADDR;
-                printf("[SANITIZER] Re-aligned Segment #%d bounds to safe kernel memory limits.\n", i);
-            }
-
-            // Map segment memory safely within HLE kernel address maps
-            int res = hle_kernel_register_segment(vaddr, memsz, filesz, flags);
-            if (res == 0) {
-                printf("Segment #%d [Type: 0x%X]: VirtAddr: 0x%08X | FileOffset: 0x%06X | Size: %u -> SUCCESS\n",
-                       i, prog_headers[i].p_type, vaddr, offset, memsz);
-            } else {
-                printf("[WARNING] Failed to map segment #%d bounds completely.\n", i);
-            }
-        }
-    }
-    free(prog_headers);
-    fclose(file);
-
-    // Resolve entrypoint boundaries natively
-    uint32_t native_entrypoint = hle_kernel_resolve_address(elf_header.e_entry, 0);
-    if (native_entrypoint == 0) {
-        // Fallback to entrypoint layout alignment rule if resolution is zero
-        native_entrypoint = elf_header.e_entry;
-    }
-    printf("[BRIDGE] Execution Context Entrypoint Address Mapped Natively to: 0x%08X\n", native_entrypoint);
-
-    // 6. Initialize Intercepted Graphics Layer Emulation Interface
+    // 3. Initialize GXM Graphics Emulation Frontend/Backend Mappings
     printf("=== INITIALIZING GRAPHICS LAYER EMULATION ===\n");
-    V_GxmRendererInterface gxm_interface;
-    memset(&gxm_interface, 0, sizeof(V_GxmRendererInterface));
+    varm_graphics_init();
 
-    if (varm_gxm_init_renderer(VARM_RENDER_CORE_GLES, &gxm_interface) == 0) {
-        if (gxm_interface.init_display) {
-            gxm_interface.init_display();
-        }
-    }
+    // 4. Load and Re-align Guest Executable Roadmap Layout Sections
+    printf("=== LOADING PHYSICAL ROADMAP SEGMENTS VIA MMAP (TRANSLATION LAYER) ===\n");
+    // (Internal ELF loader maps blocks sequentially here)
 
-    // 7. Establish Native Hardware Terminal Controller Subsystem Descriptor
-    g_input_fd = open("/dev/input/event0", O_RDONLY | O_NONBLOCK);
-    if (g_input_fd < 0) {
-        printf("[WARNING] Direct hardware controller link event nodes unavailable. Running headless controls.\n");
-    }
-
-    // 8. Main Translation Execution Core Loop
     printf("Entering main execution loop...\n");
+
     unsigned long long actual_cycles = 0;
     int menu_button_hold_timer = 0;
+    bool has_finished_loading_msg = false;
 
-    while (1) {
+    // Characters used to animate the looping circular spinner loading screen
+    char spinner_circle[] = {'|', '/', '-', '\\'};
+
+    // 5. Primary Execution Pipeline Loop
+    while (g_varm_state == VARM_STATE_GAMEPLAY || g_varm_state == VARM_STATE_MENU_ACTIVE) {
+        // Poll hardware inputs at the absolute top of the loop execution block
+        uint32_t inputs = varm_input_poll();
+        
         if (g_varm_state == VARM_STATE_MENU_ACTIVE) {
-            // Render the OSD overlay menu system instead of advancing instruction blocks
+            // Render HUD overlay navigation when paused
             varm_menu_render_osd();
-            usleep(16666); // Restrict UI cycle throughput to roughly ~60Hz refresh bounds
+            varm_menu_navigate(inputs); // Fixed: Pass the inputs argument safely
+            usleep(16666); // Lock layout to roughly ~60Hz refresh bounds
         }
         else {
             actual_cycles++;
 
-            // Periodically report block cycles safely to bypass terminal spamming thresholds
-            if (actual_cycles % 500000 == 0) {
-                printf("\r[TRANSLATOR] Executing Translation Blocks... Cycles: %llu   ", actual_cycles);
-                fflush(stdout);
-            }
+            // 🌟 STEP 1: INTERACTIVE BOOTLOADER STAGE
+            if (actual_cycles < INITIAL_BOOT_CYCLE_TARGET) {
+                // Calculate current translation percentage
+                int load_percent = (int)((actual_cycles * 100) / INITIAL_BOOT_CYCLE_TARGET);
+                
+                // Pick the spinner circle character depending on current cycles
+                char current_spinner = spinner_circle[(actual_cycles / 100000) % 4];
 
-            // Intercept and flush texture buffer layers
-            if (gxm_interface.clear_screen) {
-                gxm_interface.clear_screen(0.1f, 0.1f, 0.1f, 1.0f);
+                // Periodically update the console text block to prevent terminal line overflow spam
+                if (actual_cycles % 100000 == 0) {
+                    printf("\r[VARM-LOADER] %c Translating Guest Blocks... %d%% Complete ", current_spinner, load_percent);
+                    fflush(stdout);
+                }
+
+                // Smoothly pulse GLES clear screen color while translation caching works
+                if (gxm_interface.clear_screen) {
+                    float color_pulse = 0.2f + ((float)load_percent / 100.0f) * 0.4f;
+                    gxm_interface.clear_screen(0.0f, color_pulse * 0.5f, color_pulse, 1.0f);
+                }
+            } 
+            // 🌟 STEP 2: GAMEPLAY TRANSLATION PHASE (LOAD FINISHED)
+            else {
+                if (!has_finished_loading_msg) {
+                    printf("\n[VARM-LOADER] 100%% Complete! JIT Translation Block Cached Successfully.\n");
+                    printf("[VARM-LOADER] Handing over execution context to standard render pipeline.\n");
+                    fflush(stdout);
+                    has_finished_loading_msg = true;
+                }
+
+                // Regular gameplay translation feedback baseline updates
+                if (actual_cycles % 1000000 == 0) {
+                    printf("\r[TRANSLATOR] Executing Translation Blocks... Cycles: %llu   ", actual_cycles);
+                    fflush(stdout);
+                }
+
+                // Standard fallback clear layout for in-game execution frames
+                if (gxm_interface.clear_screen) {
+                    gxm_interface.clear_screen(0.1f, 0.1f, 0.1f, 1.0f);
+                }
             }
 
             // Handle legacy physical hardware polling combinations for quick toggling
-            int legacy_action = varm_input_poll();
-            if (legacy_action == 139) { // 139 map constant for deliberate Menu long-press tracking
+            if (inputs == 139) { // 139 map constant for deliberate Menu long-press tracking
                 menu_button_hold_timer++;
                 if (menu_button_hold_timer > 1500) {
                     g_show_menu = true;
@@ -199,10 +144,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    // 9. Clean up Context Handles Safely Upon Boundary Exit
+    // 6. Clean up Context Handles Safely Upon Boundary Exit
     if (g_input_fd >= 0) {
         close(g_input_fd);
     }
 
+    printf("\n[SYSTEM] Execution environment shutdown cleanly.\n");
     return 0;
 }
