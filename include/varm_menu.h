@@ -6,7 +6,9 @@
 
 typedef enum {
     VARM_STATE_GAMEPLAY,
-    VARM_STATE_MENU_ACTIVE
+    VARM_STATE_MENU_ACTIVE,
+    VARM_STATE_EDIT_TOUCH,  // Fixes the undeclared error in varm_menu.c
+    VARM_STATE_EXIT         // Fixes the loop boundary error in main.c
 } VarmRuntimeState;
 
 typedef enum {

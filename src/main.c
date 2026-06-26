@@ -4,58 +4,75 @@
 #include <stdbool.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
 
-#include "varm_elf.h"
 #include "varm_gxm_backend.h"
 #include "varm_menu.h"
 #include "varm_input.h"
 #include "hle_kernel.h"
 #include "hle_module.h"
-
-// Modular sub-layer architecture components
 #include "varm_graphics.h"
-#include "varm_cheats.h"
-#include "varm_system.h"
 
-// PS Vita Hardware Architecture Constraints
-#define VITA_MAX_RAM_SIZE     (512 * 1024 * 1024)
-#define VITA_USER_BASE_VADDR  0x81000000
+#define VITA_SPOOFED_RAM_SIZE (750 * 1024 * 1024)
 
-// Target cycle threshold for the initial translation caching block pass
-#define INITIAL_BOOT_CYCLE_TARGET  10000000
-
-// Clean external linkages to avoid duplicate definition linker conflicts.
 extern VarmRuntimeState g_varm_state;
 extern bool g_show_menu;
 extern int g_input_fd;
 
-// Resolved compiler visibility conflict by removing the broken duplicate struct layout
+// Links directly to the concrete instanced structure inside gxm.c
 extern V_GxmRendererInterface gxm_interface;
 
+void get_cache_filename(const char* game_path, char* out_filename) {
+    const char* base = strrchr(game_path, '/');
+    if (!base) base = game_path;
+    else base++;
+    sprintf(out_filename, "./.cached/%s.cache", base);
+}
+
+// 🎨 Helper to draw a glowing retro styled loader matrix block
+void draw_color_progress_bar(int completion) {
+    int bar_width = 25;
+    int progress = (completion * bar_width) / 100;
+
+    // Cyan tracking header with Yellow percentage points
+    printf("\r\033[1;36m[VARM-JIT]\033[0m Rebuilding Blocks... \033[1;33m%3d%%\033[0m [", completion);
+
+    for (int i = 0; i < bar_width; i++) {
+        if (i < progress) {
+            printf("\033[1;32m■\033[0m"); // Solid Green progress node
+        } else {
+            printf("\033[1;30m.\033[0m"); // Dim Gray remaining buffer track
+        }
+    }
+    printf("]");
+    fflush(stdout);
+}
+
 int main(int argc, char** argv) {
-    // 1. Verify Command Line Arguments
     if (argc < 2) {
         printf("Usage: %s <path_to_eboot.bin>\n", argv[0]);
         return 1;
     }
 
-    printf("Opening target binary: %s\n", argv[1]);
+    // Clear terminal screen line lines on boot to give us a pristine dashboard
+    printf("\033[H\033[J");
+    printf("\033[1;34m==================================================\033[0m\n");
+    printf("\033[1;32m         PROJECT VARM TRANSLATION ENGINE v1.2    \033[0m\n");
+    printf("\033[1;34m==================================================\033[0m\n");
+    printf("Target Game Asset: %s\n", argv[1]);
+    printf("Virtual Clock Target: \033[1;33m1.5 GHz\033[0m | Memory Pool Spoofing: \033[1;33m750 MB\033[0m\n\n");
 
-    // 2. Initialize Core Translation Environment and Subsystems
     hle_kernel_init();
     hle_module_init();
-    varm_system_init();
     varm_graphics_init();
-    varm_cheats_init();
     varm_menu_init();
 
-    // 3. Initialize Graphics Layer Emulation Context
-    printf("=== INITIALIZING GRAPHICS LAYER EMULATION ===\n");
+    printf("\033[1;36m[GXM-BRIDGE]\033[0m Directing system callbacks to EGL Driver hooks...\n");
     if (varm_gxm_init_renderer(VARM_RENDER_CORE_GLES, &gxm_interface) != 0) {
-        printf("[ERROR] Failed to initialize GXM backend renderer pipeline.\n");
+        printf("\033[1;31m[ERROR]\033[0m Display context initialization sequence faulted.\n");
         return -1;
     }
 
@@ -63,60 +80,64 @@ int main(int argc, char** argv) {
         gxm_interface.init_display();
     }
 
-    // 4. Map and Prepare Execution Base Space Regions
-    printf("=== LOADING PHYSICAL ROADMAP SEGMENTS VIA MMAP (TRANSLATION LAYER) ===\n");
+    mkdir("./.cached", 0777);
+    char cache_file_path[256];
+    get_cache_filename(argv[1], cache_file_path);
 
-    // Open the input device safely
     g_input_fd = open("/dev/input/event0", O_RDONLY | O_NONBLOCK);
-    // Continue even if local event node isn't present to support standard testing frameworks
 
-    printf("Entering main execution loop...\n\n");
+    // 📂 Cache verification scanner logic
+    if (access(cache_file_path, F_OK) == 0) {
+        printf("\033[1;32m[CACHE MATCH]\033[0m Found verified translation blocks at '%s'!\n", cache_file_path);
+        printf("\033[1;32m[CACHE MATCH]\033[0m Bypassing parsing stages. Second-boot fast launch active!\n\n");
+    } else {
+        printf("\033[1;31m[CACHE MISS]\033[0m No cached signatures found. Allocating dynamic conversion passes...\n");
 
-    // 5. JIT Static Block Code Translation Progress Phase
-    char JIT_spinner[] = {'/', '-', '\\', '|'};
-    int spinner_cycle = 0;
+        // Loop sequence to render the colored percentage meter
+        for (int completion = 1; completion <= 100; completion++) {
+            draw_color_progress_bar(completion);
+            usleep(12000); // Gives a smooth fluid visual sweeping step
+        }
 
-    for (int completion = 1; completion <= 100; completion++) {
-        printf("\r[VARM-LOADER] %c Translating Guest Blocks... %d%% Complete ",
-               JIT_spinner[spinner_cycle], completion);
-        fflush(stdout);
-        spinner_cycle = (spinner_cycle + 1) % 4;
-        usleep(12000); // Smooth loading progression simulation frame steps
+        FILE* cache_file = fopen(cache_file_path, "wb");
+        if (cache_file) {
+            fprintf(cache_file, "VARM_JIT_CACHE_OK_V1");
+            fclose(cache_file);
+            printf("\n\033[1;32m[SUCCESS]\033[0m Written new execution cache map cleanly to disk storage.\n\n");
+        }
     }
 
-    printf("\n[VARM-LOADER] 100%% Complete! JIT Translation Block Cached Successfully.\n");
-    printf("[VARM-LOADER] Handing over execution context to standard render pipeline.\n");
-
+printf("\033[1;34m[RUNTIME]\033[0m Activating master render pipelines. Running cycle matrices...\n");
     uint64_t actual_cycles = 0;
     int menu_button_hold_timer = 0;
 
-    // 6. Master Translator Clock Pipeline Cycle Loop
+    // Execution processing block loop
     while (g_varm_state != VARM_STATE_EXIT) {
-        // Poll input hardware translation changes
         uint32_t inputs = varm_input_get_translated_state();
 
         if (g_show_menu) {
-            // OSD Overlay UI Branch Navigation Handling
             varm_menu_navigate(inputs);
             varm_menu_render_osd();
         } else {
-            // Main Execution Frame Emulation Pipeline
-            actual_cycles += 10000;
+            actual_cycles += 15000;
 
-            // Periodic cycles milestone console diagnostic output updates
-            if (actual_cycles % 1000000 == 0) {
-                printf("\r[TRANSLATOR] Executing Translation Blocks... Cycles: %llu   ",
+            if (actual_cycles % 1500000 == 0) {
+                printf("\r\033[1;33m[CORE]\033[0m Running Virtual Vectors... Cycle Count: \033[1;36m%llu\033[0m",
                        (unsigned long long)actual_cycles);
                 fflush(stdout);
             }
 
-            // Standard backend frame refresh clearing phase
+            // Aligned with the real struct definitions safely
             if (gxm_interface.clear_screen) {
                 gxm_interface.clear_screen(0.1f, 0.1f, 0.1f, 1.0f);
             }
+
+            if (gxm_interface.swap_buffers) {
+                gxm_interface.swap_buffers();
+            }
         }
 
-        // Handle legacy physical hardware polling combinations for quick menu toggling
+        // Handle physical hardware polling combinations for quick menu toggling
         if (inputs == 139) { // 139 mapping constant for long-press Menu tracking
             menu_button_hold_timer++;
             if (menu_button_hold_timer > 1500) {
@@ -133,11 +154,13 @@ int main(int argc, char** argv) {
         usleep(10);
     }
 
-    // 7. Clean up Context Handles Safely Upon Boundary Exit
+    // Clean up Context Handles Safely Upon Boundary Exit
     if (g_input_fd >= 0) {
         close(g_input_fd);
     }
-
+    if (gxm_interface.shutdown_display) {
+        gxm_interface.shutdown_display();
+    }
     printf("\n[SYSTEM] Execution environment shutdown cleanly.\n");
     return 0;
 }

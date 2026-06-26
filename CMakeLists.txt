@@ -18,6 +18,7 @@ add_executable(varm
     src/varm_cheats.c
     src/varm_system.c
     src/varm_gxm_backend.c
+    src/varm_gxm_parser.c
 )
 
 # Link dynamic loading hooks and explicit OpenGL ES 2.0 graphics libraries safely

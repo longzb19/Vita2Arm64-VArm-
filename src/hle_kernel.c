@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "varm_elf.h"
 
-#define VITA_MAX_RAM_SIZE (512 * 1024 * 1024)
+#define VITA_MAX_RAM_SIZE    (750 * 1024 * 1024) // Upgraded from 512MB to your 750MB plan!
 #define VITA_USER_BASE_VADDR 0x81000000
 
 #define PF_X        (1 << 0)

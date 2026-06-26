@@ -151,19 +151,23 @@ int varm_gxm_init_renderer(V_RenderCoreType core_type, V_GxmRendererInterface *i
     if (!interface) return -1;
 
     if (core_type == VARM_RENDER_CORE_GLES) {
-        printf("[GXM-BRIDGE] Switched execution context pipeline to: OPENGL ES CORE\n");
+    printf("[GXM-BRIDGE] Switched execution context pipeline to: OPENGL ES CORE\n");
 
-        // Map interfaces cleanly
-        interface->init_display           = gles_init_display;
-        interface->allocate_surface       = gles_allocate_surface;
-        interface->submit_command_buffer  = gles_submit_cmd;
-        interface->clear_screen           = gles_clear_screen;
+    // Map interfaces cleanly
+    interface->init_display           = gles_init_display;
+    interface->allocate_surface       = gles_allocate_surface;
+    interface->submit_command_buffer  = gles_submit_cmd;
+    interface->clear_screen           = gles_clear_screen;
 
-        // Run hardware hooks initialization sequencing pass immediately
-        if (gles_init_display() != 0) {
-            printf("[GXM-BRIDGE] Critical Error: Internal display pipeline setup failed!\n");
-            return -1;
-        }
+    // Stub these out to prevent crashes until we implement the actual EGL display context handling
+    interface->swap_buffers           = NULL;
+    interface->shutdown_display       = NULL;
+
+    // Run hardware hooks initialization sequencing pass immediately
+    if (gles_init_display() != 0) {
+        printf("[GXM-BRIDGE] Critical Error: Internal display pipeline setup failed!\n");
+        return -1;
+    }
 
         gxm_interface = *interface;
         return 0;
