@@ -3,7 +3,7 @@
 #include <GLES2/gl2.h>
 #include <stdio.h>
 
-VarmRuntimeState g_varm_state = VARM_STATE_GAMEPLAY;
+extern VarmRuntimeState g_varm_state;
 static int s_selected_menu_item = 0;
 static int s_selected_touch_button = 0; // 0=L2, 1=R2, 2=L3, 3=R3
 

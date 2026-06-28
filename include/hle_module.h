@@ -3,30 +3,44 @@
 
 #include <stdint.h>
 
-// Clean typedef for host-side implementation function pointers
+// Dynamic function pointer signature blueprint for host-side intercepts
 typedef void (*HleHostFn)(void);
 
-// Represents a single hooked SONY system function
 typedef struct {
-    const char* function_name;     // e.g., "sceKernelCreateThread"
-    uint32_t nid;                 // SONY's unique identifier hash for this function
-    HleHostFn host_implementation; // Function pointer address [Cleaned up via typedef]
+    const char* function_name;
+    uint32_t nid;
+    HleHostFn host_implementation;
 } HleFunctionHook;
 
-// Represents a collection of functions inside a SONY system library module
 typedef struct {
-    const char* module_name;   // e.g., "SceKernelThreadMgr"
+    const char* module_name;
     HleFunctionHook* hooks;
     int hook_count;
 } HleModule;
 
-// Core Registry Management Functions
+// Master setup lifecycle functions
 void hle_module_init(void);
 HleHostFn hle_module_resolve_import(const char* module_name, const char* func_name, uint32_t nid);
 
-// Real placeholder implementations for critical target systems
+// --- Core Engine Intercept Envelopes ---
+
+// SceKernelThreadMgr Subsystems
 void mock_sceKernelCreateThread(void);
+
+// SceCtrl Input Subsystems
 void mock_sceCtrlPeekBufferPositive(void);
+
+// SceGxm Graphics Driver Interface Subsystems
 void mock_sceGxmInitialize(void);
+
+// SceAudio Pipeline Subsystems
+int mock_sceAudioOutOpenPort(int portType, int numSamples, int freq, int mode);
+int mock_sceAudioOutOutput(int port, const void *ptr);
+int mock_sceAudioOutReleasePort(int port);
+
+// SceDisplay Pipeline Subsystems
+int mock_sceDisplaySetFrameBuf(const void *pParam, int sync);
+int mock_sceDisplayWaitVblankStart(void);
+int mock_sceDisplayWaitSetFrameBuf(void);
 
 #endif // HLE_MODULE_H

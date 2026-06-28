@@ -1,135 +1,256 @@
 #include "varm_input.h"
 #include <stdio.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <linux/input.h>
-#include <stdbool.h>
-#include <time.h>
-#include <string.h>   // Added for strstr, sscanf, strncpy
-#include <sys/stat.h> // Added for mkdir
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
 
-// Global States Instantiated Here for the Linker
-int g_input_fd = -1;
+// Add this line right here:
+void varm_input_load_profile(void);
+
+// Link with the global game ID tracking variable from main.c
+extern char g_game_id[32];
+
+// Instantiating Global Variables
 bool g_show_menu = false;
-
 VarmVirtualTouchState g_virtual_touch = { false, 0, 0, false, 0, 0 };
 VarmTouchProfile g_active_profile;
-char g_game_id[32] = "DEFAULT";
 
-// Tracker variable (cleaned up duplicate)
-static time_t menu_button_held_since = 0;
+uint8_t g_stick_lx = 128;
+uint8_t g_stick_ly = 128;
+uint8_t g_stick_rx = 128;
+uint8_t g_stick_ry = 128;
 
-static ControlMap layout_config[] = {
-    { HW_KEY_UP,     VITA_CTRL_UP,       "D-PAD UP" },
-    { HW_KEY_DOWN,   VITA_CTRL_DOWN,     "D-PAD DOWN" },
-    { HW_KEY_LEFT,   VITA_CTRL_LEFT,     "D-PAD LEFT" },
-    { HW_KEY_RIGHT,  VITA_CTRL_RIGHT,    "D-PAD RIGHT" },
-    { HW_KEY_B,      VITA_CTRL_CROSS,    "BUTTON B -> CROSS" },
-    { HW_KEY_A,      VITA_CTRL_CIRCLE,   "BUTTON A -> CIRCLE" },
-    { HW_KEY_Y,      VITA_CTRL_SQUARE,   "BUTTON Y -> SQUARE" },
-    { HW_KEY_X,      VITA_CTRL_TRIANGLE, "BUTTON X -> TRIANGLE" },
-    { HW_KEY_L1,     VITA_CTRL_LTRIGGER, "L1 TRIGGER" },
-    { HW_KEY_R1,     VITA_CTRL_RTRIGGER, "R1 TRIGGER" },
-    { HW_KEY_SELECT, VITA_CTRL_SELECT,   "SELECT KEY" },
-    { HW_KEY_START,  VITA_CTRL_START,    "START KEY" }
+static SDL_GameController *g_controller = NULL;
+static bool menu_button_was_pressed = false;  // Tracks the previous frame's state for single click
+static uint32_t exit_combo_hold_start = 0;    // Tracks how long the exit combo is held down
+
+// Standard Mappings for SDL Controller Abstraction Layer
+static SdlControlMap control_layout[] = {
+    { SDL_CONTROLLER_BUTTON_DPAD_UP,        VITA_CTRL_UP },
+    { SDL_CONTROLLER_BUTTON_DPAD_DOWN,      VITA_CTRL_DOWN },
+    { SDL_CONTROLLER_BUTTON_DPAD_LEFT,      VITA_CTRL_LEFT },
+    { SDL_CONTROLLER_BUTTON_DPAD_RIGHT,     VITA_CTRL_RIGHT },
+    { SDL_CONTROLLER_BUTTON_A,              VITA_CTRL_CROSS },    // South Button -> Cross
+    { SDL_CONTROLLER_BUTTON_B,              VITA_CTRL_CIRCLE },   // East Button -> Circle
+    { SDL_CONTROLLER_BUTTON_X,              VITA_CTRL_SQUARE },   // West Button -> Square
+    { SDL_CONTROLLER_BUTTON_Y,              VITA_CTRL_TRIANGLE }, // North Button -> Triangle
+    { SDL_CONTROLLER_BUTTON_LEFTSHOULDER,   VITA_CTRL_LTRIGGER },
+    { SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,  VITA_CTRL_RTRIGGER },
+    { SDL_CONTROLLER_BUTTON_START,          VITA_CTRL_START },
+    { SDL_CONTROLLER_BUTTON_BACK,           VITA_CTRL_SELECT }
 };
 
-// Extends parsing engine logic to track game targets cleanly
-void varm_input_init_profile(const char* game_path) {
-    // Look for unique patterns like "games/PCSA00126/eboot.bin"
-    const char* find = strstr(game_path, "games/");
-    if (find) {
-        sscanf(find, "games/%31[^/]", g_game_id);
-    } else {
-        strncpy(g_game_id, "DEFAULT", sizeof(g_game_id));
+int varm_input_init(void) {
+    if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) < 0) {
+        printf("[INPUT] Error: Failed to initialize SDL GameController subsystem: %s\n", SDL_GetError());
+        return -1;
     }
 
-    // Set fallback coordinate targets matching stock positions
-    g_active_profile.l2 = (TouchTarget){ 200, 272, true };  // Rear Left Default
-    g_active_profile.r2 = (TouchTarget){ 760, 272, true };  // Rear Right Default
-    g_active_profile.l3 = (TouchTarget){ 150, 400, false }; // Front Left Default
-    g_active_profile.r3 = (TouchTarget){ 810, 400, false }; // Front Right Default
-
-    // Read stored settings file from disk storage block if present
-    char config_path[256];
-    snprintf(config_path, sizeof(config_path), "./.cached/%s_touch.cfg", g_game_id);
-
-    FILE* file = fopen(config_path, "r");
-    if (file) {
-        fscanf(file, "L2:%hu,%hu\n", &g_active_profile.l2.x, &g_active_profile.l2.y);
-        fscanf(file, "R2:%hu,%hu\n", &g_active_profile.r2.x, &g_active_profile.r2.y);
-        fscanf(file, "L3:%hu,%hu\n", &g_active_profile.l3.x, &g_active_profile.l3.y);
-        fscanf(file, "R3:%hu,%hu\n", &g_active_profile.r3.x, &g_active_profile.r3.y);
-        fclose(file);
-        printf("[VARM-INPUT] Loaded custom touch config mapping for game ID: %s\n", g_game_id);
-    }
-}
-
-void varm_input_save_profile(void) {
-    mkdir("./.cached", 0777);
-    char config_path[256];
-    snprintf(config_path, sizeof(config_path), "./.cached/%s_touch.cfg", g_game_id);
-
-    FILE* file = fopen(config_path, "w");
-    if (file) {
-        fprintf(file, "L2:%hu,%hu\n", g_active_profile.l2.x, g_active_profile.l2.y);
-        fprintf(file, "R2:%hu,%hu\n", g_active_profile.r2.x, g_active_profile.r2.y);
-        fprintf(file, "L3:%hu,%hu\n", g_active_profile.l3.x, g_active_profile.l3.y);
-        fprintf(file, "R3:%hu,%hu\n", g_active_profile.r3.x, g_active_profile.r3.y);
-        fclose(file);
-        printf("[VARM-INPUT] Successfully written configuration profile data out to: %s\n", config_path);
-    }
-}
-
-uint32_t varm_input_get_translated_state(void) {
-    if (g_input_fd < 0) return 0;
-
-    static uint32_t active_vita_state = 0;
-    int layout_count = sizeof(layout_config) / sizeof(layout_config[0]);
-    struct input_event ev;
-
-    while (read(g_input_fd, &ev, sizeof(struct input_event)) > 0) {
-        if (ev.type == EV_KEY) {
-            for (int i = 0; i < layout_count; i++) {
-                if (ev.code == layout_config[i].hw_code) {
-                    if (ev.value == 1) active_vita_state |= layout_config[i].vita_mask;
-                    else if (ev.value == 0) active_vita_state &= ~layout_config[i].vita_mask;
-                }
-            }
-
-            // Map inputs dynamically to coordinates retrieved from config profiles
-            if (ev.code == HW_KEY_L2) {
-                g_virtual_touch.rear_touch_active = (ev.value > 0);
-                g_virtual_touch.rear_x = g_active_profile.l2.x;
-                g_virtual_touch.rear_y = g_active_profile.l2.y;
-            }
-            if (ev.code == HW_KEY_R2) {
-                g_virtual_touch.rear_touch_active = (ev.value > 0);
-                g_virtual_touch.rear_x = g_active_profile.r2.x;
-                g_virtual_touch.rear_y = g_active_profile.r2.y;
-            }
-            if (ev.code == HW_KEY_L3) {
-                g_virtual_touch.front_touch_active = (ev.value > 0);
-                g_virtual_touch.front_x = g_active_profile.l3.x;
-                g_virtual_touch.front_y = g_active_profile.l3.y;
-            }
-            if (ev.code == HW_KEY_R3) {
-                g_virtual_touch.front_touch_active = (ev.value > 0);
-                g_virtual_touch.front_x = g_active_profile.r3.x;
-                g_virtual_touch.front_y = g_active_profile.r3.y;
-            }
-
-            if (ev.code == HW_KEY_MENU) {
-                if (ev.value == 1) menu_button_held_since = time(NULL);
-                else if (ev.value == 0) menu_button_held_since = 0;
+    int joysticks = SDL_NumJoysticks();
+    for (int i = 0; i < joysticks; i++) {
+        if (SDL_IsGameController(i)) {
+            g_controller = SDL_GameControllerOpen(i);
+            if (g_controller) {
+                printf("[INPUT] Successfully bound hardware controller: %s\n", SDL_GameControllerName(g_controller));
+                break;
             }
         }
     }
 
-    if (menu_button_held_since != 0 && difftime(time(NULL), menu_button_held_since) >= 1.2) {
-        g_show_menu = !g_show_menu;
-        menu_button_held_since = 0;
+    if (!g_controller) {
+        printf("[INPUT] Warning: No hardware controller detected. Polling raw values.\n");
     }
 
-    return active_vita_state;
+    // Load default profile layouts fallback
+    g_active_profile.l2 = (TouchTarget){150, 272, false};
+    g_active_profile.r2 = (TouchTarget){810, 272, false};
+    g_active_profile.l3 = (TouchTarget){200, 400, true};
+    g_active_profile.r3 = (TouchTarget){760, 400, true};
+
+    varm_input_load_profile();
+    return 0;
+}
+
+uint32_t varm_input_poll(void) {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_QUIT) {
+            g_varm_state = VARM_STATE_EXIT;
+            return 0;
+        }
+    }
+
+    if (!g_controller) return 0;
+
+    uint32_t vita_mask = 0;
+    int layout_size = sizeof(control_layout) / sizeof(control_layout[0]);
+
+    // 1. Process Core Digital Buttons
+    for (int i = 0; i < layout_size; i++) {
+        if (SDL_GameControllerGetButton(g_controller, control_layout[i].sdl_btn)) {
+            vita_mask |= control_layout[i].vita_mask;
+        }
+    }
+
+    // 2. Process Dual Analog Sticks (Rescale SDL -32768..32767 to Vita 0..255)
+    int16_t sdl_lx = SDL_GameControllerGetAxis(g_controller, SDL_CONTROLLER_AXIS_LEFTX);
+    int16_t sdl_ly = SDL_GameControllerGetAxis(g_controller, SDL_CONTROLLER_AXIS_LEFTY);
+    int16_t sdl_rx = SDL_GameControllerGetAxis(g_controller, SDL_CONTROLLER_AXIS_RIGHTX);
+    int16_t sdl_ry = SDL_GameControllerGetAxis(g_controller, SDL_CONTROLLER_AXIS_RIGHTY);
+
+    g_stick_lx = (uint8_t)(((sdl_lx + 32768) * 255) / 65535);
+    g_stick_ly = (uint8_t)(((sdl_ly + 32768) * 255) / 65535);
+    g_stick_rx = (uint8_t)(((sdl_rx + 32768) * 255) / 65535);
+    g_stick_ry = (uint8_t)(((sdl_ry + 32768) * 255) / 65535);
+
+    // 3. Evaluate L2/R2/L3/R3 Triggers mapped onto Virtual Touch Coordinates
+    g_virtual_touch.front_touch_active = false;
+    g_virtual_touch.rear_touch_active = false;
+
+    // L2 Trigger -> Virtual Touch mapped zone
+    if (SDL_GameControllerGetAxis(g_controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000) {
+        if (g_active_profile.l2.is_rear) {
+            g_virtual_touch.rear_touch_active = true;
+            g_virtual_touch.rear_x = g_active_profile.l2.x;
+            g_virtual_touch.rear_y = g_active_profile.l2.y;
+        } else {
+            g_virtual_touch.front_touch_active = true;
+            g_virtual_touch.front_x = g_active_profile.l2.x;
+            g_virtual_touch.front_y = g_active_profile.l2.y;
+        }
+    }
+
+    // R2 Trigger -> Virtual Touch mapped zone
+    if (SDL_GameControllerGetAxis(g_controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000) {
+        if (g_active_profile.r2.is_rear) {
+            g_virtual_touch.rear_touch_active = true;
+            g_virtual_touch.rear_x = g_active_profile.r2.x;
+            g_virtual_touch.rear_y = g_active_profile.r2.y;
+        } else {
+            g_virtual_touch.front_touch_active = true;
+            g_virtual_touch.front_x = g_active_profile.r2.x;
+            g_virtual_touch.front_y = g_active_profile.r2.y;
+        }
+    }
+
+    // L3 / Click Left Stick
+    if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_LEFTSTICK)) {
+        if (g_active_profile.l3.is_rear) {
+            g_virtual_touch.rear_touch_active = true;
+            g_virtual_touch.rear_x = g_active_profile.l3.x;
+            g_virtual_touch.rear_y = g_active_profile.l3.y;
+        } else {
+            g_virtual_touch.front_touch_active = true;
+            g_virtual_touch.front_x = g_active_profile.l3.x;
+            g_virtual_touch.front_y = g_active_profile.l3.y;
+        }
+    }
+
+    // R3 / Click Right Stick
+    if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_RIGHTSTICK)) {
+        if (g_active_profile.r3.is_rear) {
+            g_virtual_touch.rear_touch_active = true;
+            g_virtual_touch.rear_x = g_active_profile.r3.x;
+            g_virtual_touch.rear_y = g_active_profile.r3.y;
+        } else {
+            g_virtual_touch.front_touch_active = true;
+            g_virtual_touch.front_x = g_active_profile.r3.x;
+            g_virtual_touch.front_y = g_active_profile.r3.y;
+        }
+    }
+
+    // 4. Unified Hotkey System (Single-press menu toggle + Multi-button exit combo)
+    bool btn_menu   = SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_GUIDE);
+    bool btn_start  = SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_START);
+    bool btn_select = SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_BACK);
+
+    // --- COMBO CHECK: Hold Menu + Start + Select to Exit ---
+    if (btn_menu && btn_start && btn_select) {
+        uint32_t now = SDL_GetTicks();
+        if (exit_combo_hold_start == 0) {
+            exit_combo_hold_start = now;
+        } else if (now - exit_combo_hold_start > 600) { // Held down for 600ms continuous
+            printf("\n[SYSTEM] Combo hotkey hold verified. Exiting runtime environment cleanly...\n");
+            g_varm_state = VARM_STATE_EXIT;
+        }
+    } else {
+        exit_combo_hold_start = 0; // Reset timer immediately if any button in the combo is released
+    }
+
+    // --- SINGLE PRESS CHECK: Press Menu once to toggle interface ---
+    if (btn_menu && !menu_button_was_pressed) {
+        // Only toggle if we aren't intentionally pressing the other combo keys
+        if (!btn_start && !btn_select) {
+            g_show_menu = !g_show_menu;
+
+            // Synchronize runtime state machine contexts
+            g_varm_state = g_show_menu ? VARM_STATE_MENU_ACTIVE : VARM_STATE_GAMEPLAY;
+
+            printf("[SYSTEM] Menu layout hotkey toggled overlay display visible: %s\n",
+                   g_show_menu ? "TRUE" : "FALSE");
+        }
+    }
+
+    // Save current frame state to compare against next frame tick
+    menu_button_was_pressed = btn_menu;
+
+    return vita_mask;
+}
+
+void varm_input_save_profile(void) {
+    char profile_path[256];
+    snprintf(profile_path, sizeof(profile_path), "./profiles/%s.cfg", g_game_id);
+
+    struct stat st = {0};
+    if (stat("./profiles", &st) == -1) {
+        mkdir("./profiles", 0755);
+    }
+
+    FILE *f = fopen(profile_path, "w");
+    if (!f) {
+        printf("[PROFILE] Error: Failed to open %s for saving runtime layouts.\n", profile_path);
+        return;
+    }
+
+    fprintf(f, "L2=%d,%d,%d\n", g_active_profile.l2.x, g_active_profile.l2.y, g_active_profile.l2.is_rear);
+    fprintf(f, "R2=%d,%d,%d\n", g_active_profile.r2.x, g_active_profile.r2.y, g_active_profile.r2.is_rear);
+    fprintf(f, "L3=%d,%d,%d\n", g_active_profile.l3.x, g_active_profile.l3.y, g_active_profile.l3.is_rear);
+    fprintf(f, "R3=%d,%d,%d\n", g_active_profile.r3.x, g_active_profile.r3.y, g_active_profile.r3.is_rear);
+    fclose(f);
+    printf("[PROFILE] Configurations written successfully to target structure: %s\n", profile_path);
+}
+
+void varm_input_load_profile(void) {
+    char profile_path[256];
+    snprintf(profile_path, sizeof(profile_path), "./profiles/%s.cfg", g_game_id);
+
+    FILE *f = fopen(profile_path, "r");
+    if (!f) {
+        printf("[PROFILE] Notice: No unique configuration file found for %s. Using default baseline map.\n", g_game_id);
+        return;
+    }
+
+    char line[128];
+    while (fgets(line, sizeof(line), f)) {
+        int x, y, rear;
+        if (sscanf(line, "L2=%d,%d,%d", &x, &y, &rear) == 3) {
+            g_active_profile.l2 = (TouchTarget){x, y, rear};
+        } else if (sscanf(line, "R2=%d,%d,%d", &x, &y, &rear) == 3) {
+            g_active_profile.r2 = (TouchTarget){x, y, rear};
+        } else if (sscanf(line, "L3=%d,%d,%d", &x, &y, &rear) == 3) {
+            g_active_profile.l3 = (TouchTarget){x, y, rear};
+        } else if (sscanf(line, "R3=%d,%d,%d", &x, &y, &rear) == 3) {
+            g_active_profile.r3 = (TouchTarget){x, y, rear};
+        }
+    }
+    fclose(f);
+    printf("[PROFILE] Dynamic configuration block imported successfully from file mapping structure.\n");
+}
+
+void varm_input_shutdown(void) {
+    if (g_controller) {
+        SDL_GameControllerClose(g_controller);
+        g_controller = NULL;
+    }
+    SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
 }
