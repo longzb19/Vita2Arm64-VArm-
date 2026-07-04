@@ -31,12 +31,11 @@ int varm_cheats_parse_line(const char *line) {
     // Skip empty lines or comment tags
     if (line[0] == '#' || line[0] == '\0' || line[0] == '\n') return 0;
 
-    char token[8];
+    char token[16];
     uint32_t raw_offset = 0;
     uint32_t target_value = 0;
 
-    // Scan standard cheat format string sequences
-    if (sscanf(line, "%7s 0x%X 0x%X", token, &raw_offset, &target_value) == 3) {
+    if (sscanf(line, "%s 0x%X 0x%X", token, &raw_offset, &target_value) == 3) {
         if (strcmp(token, "_V0") == 0) {
             s_cheat_db[s_cheat_count].offset = raw_offset;
             s_cheat_db[s_cheat_count].value = target_value;
@@ -54,8 +53,6 @@ int varm_cheats_parse_line(const char *line) {
 void varm_cheats_inject(void) {
     if (s_cheat_count == 0) return;
 
-    int active_injections = 0;
-
     for (int i = 0; i < s_cheat_count; i++) {
         if (!s_cheat_db[i].enabled) continue;
 
@@ -63,17 +60,11 @@ void varm_cheats_inject(void) {
         uint32_t runtime_vaddr = VITA_USER_BASE_VADDR + s_cheat_db[i].offset;
 
         // Verify the memory layout addresses safely via core MMU segment lookup tables
-        uint32_t resolved_host_ptr = hle_kernel_resolve_address(runtime_vaddr, 2); // 2 = Write permissions required
+        void* resolved_host_ptr = hle_kernel_resolve_address(runtime_vaddr, 2); // 2 = Write permissions
 
-        if (resolved_host_ptr) {
-            // Write memory data word into game address space
-            volatile uint32_t *dest = (volatile uint32_t*)((uintptr_t)resolved_host_ptr);
-            *dest = s_cheat_db[i].value;
-            active_injections++;
+        if (resolved_host_ptr != NULL) {
+            // 🛠️ FIX: Changed 'cheat_value' to the correct structure variable 's_cheat_db[i].value'
+            *(uint32_t*)resolved_host_ptr = s_cheat_db[i].value;
         }
-    }
-
-    if (active_injections > 0) {
-        printf("[VARM CHEAT] Dynamic Injection: Cleanly maintained %d live memory patches.\n", active_injections);
     }
 }

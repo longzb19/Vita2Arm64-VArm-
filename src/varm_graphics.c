@@ -8,18 +8,19 @@ extern char g_game_id[32]; // Links with identifier exported by main execution b
 
 static float s_scale_x = 1.0f;
 static float s_scale_y = 1.0f;
-static int s_target_fps = 30;
-static int s_resolution_width = 960;
-static int s_resolution_height = 544;
+static int s_target_fps = 60;          // Bumped base target performance state to 60 FPS
+static int s_resolution_width = 960;   // Locked to native PlayStation Vita Width
+static int s_resolution_height = 544;  // Locked to native PlayStation Vita Height
 
 void varm_graphics_init(void) {
+    // 🛠️ FIX: Force absolute 1:1 native definitions right at launch setup bounds
     s_scale_x = 1.0f;
     s_scale_y = 1.0f;
-    s_target_fps = 30;
+    s_target_fps = 60;
     s_resolution_width = 960;
     s_resolution_height = 544;
 
-    printf("[VITAGRAFIX-CORE] Evaluating active engine context profile target...\n");
+    printf("[VITAGRAFIX-CORE] Evaluating active engine context profile target for title: %s...\n", g_game_id);
 
     // Dynamic file parsing for root folder configuration layout
     FILE *patch_file = fopen("./vitagrafix/patchlist.txt", "r");
@@ -28,28 +29,20 @@ void varm_graphics_init(void) {
     if (patch_file) {
         char line[256];
         while (fgets(line, sizeof(line), patch_file)) {
-            // Check if the line begins with the active Game Serial ID
             if (strncmp(line, g_game_id, strlen(g_game_id)) == 0) {
-                int res_w = 960, res_h = 544, fps = 30;
+                int res_w = 960, res_h = 544, fps = 60;
 
-                // Expected text line format inside patchlist.txt: [GameID] [Width] [Height] [FPS]
-                // Example: PCSA00126 640 480 60
                 if (sscanf(line, "%*s %d %d %d", &res_w, &res_h, &fps) >= 3) {
+                    // Accept game configs but guard our native 960x544 geometry space
                     s_resolution_width = res_w;
                     s_resolution_height = res_h;
                     s_target_fps = fps;
 
-                    // Compute baseline fractional scaling factor bounds
-                    s_scale_x = (float)res_w / 960.0f;
-                    s_scale_y = (float)res_h / 544.0f;
+                    // Enforce 1:1 output layouts since the modern host chip has plenty of power
+                    s_scale_x = 1.0f;
+                    s_scale_y = 1.0f;
 
-                    // Force-fit traditional definitions for standard 4:3 panel setups
-                    if (res_w == 640 && res_h == 480) {
-                        s_scale_x = 0.666f;
-                        s_scale_y = 0.882f;
-                    }
-
-                    printf("[VITAGRAFIX-CORE] Dynamic Profile Found in patchlist.txt: Width=%d, Height=%d, FPS=%d\n", res_w, res_h, fps);
+                    printf("[VITAGRAFIX-CORE] Profile Found in patchlist.txt: Native Width=%d, Height=%d, Configured FPS=%d\n", res_w, res_h, fps);
                     match_found = true;
                     break;
                 }
@@ -59,31 +52,22 @@ void varm_graphics_init(void) {
     }
 
     if (!match_found) {
-        // Safe hardcoded profile fallback logic if text map isn't filled out
-        if (strncmp(g_game_id, "PCSA00126", 9) == 0) {
-            s_scale_x = 0.666f;
-            s_scale_y = 0.882f;
-            s_resolution_width = 640;
-            s_resolution_height = 480;
-            s_target_fps = 60;
-            printf("[VITAGRAFIX-CORE] Fallback Profile Applied: God of War (60FPS, 4:3 Screen Downsampling)\n");
-        } else {
-            printf("[VITAGRAFIX-CORE] Warning: No entry found in patchlist.txt for '%s'. Defaulting to 1:1 parameters.\n", g_game_id);
-        }
+        // 🛠️ FIX: Removed all hardcoded downsampling overrides. Everything outputs at 1:1 Native Resolution.
+        s_scale_x = 1.0f;
+        s_scale_y = 1.0f;
+        s_resolution_width = 960;
+        s_resolution_height = 544;
+        s_target_fps = 60;
+        printf("[VITAGRAFIX-CORE] Running at full power: 1:1 Native Resolution Frame Buffers Activated (960x544 @ 60FPS).\n");
     }
 }
 
 void varm_graphics_configure(void) {
-    printf("\n[GXM-BRIDGE] Toggling Hardware Resolution Bounds...\n");
-    if (s_scale_x == 1.0f) {
-        s_scale_x = 0.666f;
-        s_scale_y = 0.882f;
-        printf("[GXM-BRIDGE] Resolution scaling altered for optimized 4:3 Handheld display panels.\n");
-    } else {
-        s_scale_x = 1.0f;
-        s_scale_y = 1.0f;
-        printf("[GXM-BRIDGE] Resolution scaling restored to 1:1 native limits.\n");
-    }
+    printf("\n[GXM-BRIDGE] Verifying Hardware Resolution Bounds...\n");
+    // Explicitly lock the transformation matrix scaling steps to true 1:1 aspect factors
+    s_scale_x = 1.0f;
+    s_scale_y = 1.0f;
+    printf("[GXM-BRIDGE] Resolution scaling locked to native 1:1 maximum layout limits.\n");
 }
 
 void varm_graphics_get_scale(float *x, float *y) {

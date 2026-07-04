@@ -3,8 +3,9 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "varm_bridge.h"
 
-// Simplified representation of a Sony Module Info block inside decrypted binaries
+// Added __attribute__((packed)) and renamed to prevent conflict
 typedef struct {
     uint16_t module_attributes;
     uint8_t  module_version[2];
@@ -16,7 +17,7 @@ typedef struct {
     uint32_t import_top;
     uint32_t import_end;
     uint32_t nid;
-} SceModuleInfo;
+} SceModuleInfoLoader;
 
 // Table layout tracking a game binary's runtime dependencies
 typedef struct {
@@ -27,8 +28,10 @@ typedef struct {
     uint32_t entry_table_vaddr;
 } SceLibraryImport;
 
-// Master lifecycle function definitions
 int varm_loader_load_binary(const char* file_path);
 void varm_loader_dump_elf_header(void);
+
+// 🛠️ Option 2 Bridge: Map the old call in main.c to your new implementation
+#define varm_bin_load_executable varm_loader_load_binary
 
 #endif // VARM_BIN_LOADER_H

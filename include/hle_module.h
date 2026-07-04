@@ -2,9 +2,11 @@
 #define HLE_MODULE_H
 
 #include <stdint.h>
+#include <stdbool.h>
+#include "varm_bridge.h" // Pulls in the core V_ARMRegisters structural context layout
 
-// Dynamic function pointer signature blueprint for host-side intercepts
-typedef void (*HleHostFn)(void);
+// Host hook function layout pointers accept the active register configuration state
+typedef void (*HleHostFn)(V_ARMRegisters *regs);
 
 typedef struct {
     const char* function_name;
@@ -18,21 +20,11 @@ typedef struct {
     int hook_count;
 } HleModule;
 
-// Master setup lifecycle functions
+// Peripheral Initialization and Resolution APIs
 void hle_module_init(void);
 HleHostFn hle_module_resolve_import(const char* module_name, const char* func_name, uint32_t nid);
 
-// --- Core Engine Intercept Envelopes ---
-void mock_sceKernelCreateThread(void);
-void mock_sceCtrlPeekBufferPositive(void);
-void mock_sceGxmInitialize(void);
-
-int mock_sceAudioOutOpenPort(int portType, int numSamples, int freq, int mode);
-int mock_sceAudioOutOutput(int port, const void *ptr);
-int mock_sceAudioOutReleasePort(int port);
-
-int mock_sceDisplaySetFrameBuf(const void *pParam, int sync);
-int mock_sceDisplayWaitVblankStart(void);
-int mock_sceDisplayWaitSetFrameBuf(void);
+// 🛠️ Option 2 Bridge: Map the old call in main.c to your new implementation
+#define hle_module_bootstrap_symbols hle_module_init
 
 #endif // HLE_MODULE_H

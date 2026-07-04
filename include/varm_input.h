@@ -53,6 +53,7 @@ typedef struct {
 } SdlControlMap;
 
 // Global Exported Interfaces
+extern bool g_running;
 extern VarmVirtualTouchState g_virtual_touch;
 extern VarmTouchProfile g_active_profile;
 extern VarmRuntimeState g_varm_state;
@@ -64,11 +65,11 @@ extern uint8_t g_stick_ly;
 extern uint8_t g_stick_rx;
 extern uint8_t g_stick_ry;
 
-// Global Exported Functions
-int varm_input_init(void);
+// --- Explicit Subsystem Function Declarations ---
+void varm_input_init(void);
 uint32_t varm_input_poll(void);
-void varm_input_load_profile(void);
-void varm_input_save_profile(void);
-void varm_input_shutdown(void);
+void varm_input_shutdown(void);     // 👈 ADD THIS
+void varm_input_save_profile(void); // 👈 ADD THIS
+void varm_input_load_profile(void); // 👈 ADD THIS
 
 #endif // VARM_INPUT_H

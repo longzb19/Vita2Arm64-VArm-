@@ -12,6 +12,7 @@ find_package(SDL2 REQUIRED)
 add_executable(varm
     src/main.c
     src/hle_kernel.c
+    src/hle_gxm.c
     src/hle_module.c
     src/varm_menu.c
     src/varm_input.c
@@ -20,7 +21,10 @@ add_executable(varm
     src/varm_system.c
     src/varm_gxm_backend.c
     src/varm_gxm_parser.c
-    src/varm_bin_loader.c
+    src/varm_gxp_shader.c   # 💡 Change this to varm_gxp_compiler.c if that's what's on disk!
+    src/varm_bin_loader.c   # 💡 Change this to varm_elf_loader.c if that's what's on disk!
+    src/varm_jit.c
+    src/varm_audio.c        # 👈 FIX: Added our brand new audio module to the build queue
 )
 
 # Target-scoped include directories
