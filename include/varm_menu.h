@@ -28,5 +28,7 @@ void varm_menu_navigate(uint32_t inputs);
 void varm_menu_render_osd(void);
 void varm_menu_handle_inputs(int key_code, bool pressed);
 void varm_menu_render_overlay(int selected);
+void varm_menu_draw_loading(int completion);
+void varm_menu_draw_mock_game(void);
 
 #endif // VARM_MENU_H

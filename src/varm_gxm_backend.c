@@ -272,6 +272,11 @@ static void gles_clear_screen(float r, float g, float b, float a) {
 }
 
 static int gles_swap_buffers(void) {
+    extern SDL_Window *g_window;
+    if (g_window) {
+        SDL_GL_SwapWindow(g_window);
+        return 0;
+    }
     if (egl_swap_buffers_ptr && g_cached_egl_display && g_cached_egl_surface) {
         return egl_swap_buffers_ptr(g_cached_egl_display, g_cached_egl_surface);
     }

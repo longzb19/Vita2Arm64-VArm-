@@ -33,10 +33,13 @@ typedef struct {
     uint32_t resource_index;
 } SceGxmProgramParameter;
 
+// 👈 FIX: Alias this structure so varm_gxp_shader.c can find its parameter type!
+typedef SceGxmProgramParameter GxpParameter;
+
 typedef struct {
     uint32_t magic; // "GXP\0"
     uint32_t version;
-    uint32_t program_size;
+    uint32_t size;
     uint32_t parameter_count;
     uint32_t parameter_table_offset;
 } GxpHeader;

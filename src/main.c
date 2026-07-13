@@ -20,6 +20,10 @@
 #include "varm_bin_loader.h"
 #include "varm_jit.h"
 
+// Forward declarations for audio linkage
+void varm_audio_init(void);
+void varm_audio_shutdown(void);
+
 #define VITA_SPOOFED_RAM_SIZE (750 * 1024 * 1024)
 
 VarmRuntimeState g_varm_state = VARM_STATE_GAMEPLAY;
@@ -44,27 +48,28 @@ int main(int argc, char **argv) {
         return -1;
     }
 
+    // Spin up virtual table environments first
     hle_kernel_init();
 
-    printf("\n[Step 1] Loading Sony Executable Container...\n");
+    // 🛠️ FIX: Initialize the HLE module registry BEFORE loading the binary
+    // This ensures NID function lookup maps are populated for the linker!
+    printf("\n[Step 1] Resolving HLE Library Native Modules...\n");
+    hle_module_init();
+
+    printf("\n[Step 2] Loading Sony Executable Container...\n");
     if (varm_loader_load_binary(argv[1]) != 0) {
         printf("[FATAL] Executable validation or binary parsing phase dropped.\n");
         hle_kernel_shutdown();
         return -1;
     }
 
-    printf("\n[Step 2] Resolving HLE Library Native Modules...\n");
-    hle_module_init();
-
     printf("\n[Step 3] Mapping Core System VAddr Memory Highway Blocks...\n");
     hle_kernel_dump_maps();
 
-    printf("\n[Step 4] Starting JIT Translational Compilation Engine Loops...\n");
-    varm_jit_init(argv[1]);
-
-    // Step 5: Ready the peripheral interfaces and graphics bridges safely
+    // Step 5: Ready the peripheral interfaces and graphics bridges safely (moved before JIT init)
     varm_graphics_init();
     varm_input_init();
+    varm_audio_init();
 
     // Wire up driver handlers to keep UI and game code unified
     varm_gxm_init_renderer(VARM_RENDER_CORE_GLES, &gxm_interface);
@@ -77,38 +82,52 @@ int main(int argc, char **argv) {
         gxm_interface.allocate_surface(&main_surface);
     }
 
+    printf("\n[Step 4] Starting JIT Translational Compilation Engine Loops...\n");
+    varm_jit_init(argv[1]);
+
     uint32_t inputs;
 
-    // --- MAIN ENGINE RUNTIME LOOP ---
-    while (g_running) {
-        inputs = varm_input_poll();
+// --- MAIN ENGINE RUNTIME LOOP ---
+while (g_running) {
+    inputs = varm_input_poll();
 
-        if (gxm_interface.clear_screen) {
-            gxm_interface.clear_screen(0.1f, 0.1f, 0.1f, 1.0f);
-        }
-
-        if (g_varm_state == VARM_STATE_GAMEPLAY) {
-            varm_jit_execute_cycle();
-            varm_cheats_inject();
-        }
-
-        if (g_show_menu || g_varm_state == VARM_STATE_MENU_ACTIVE || g_varm_state == VARM_STATE_EDIT_TOUCH) {
-            varm_menu_render_osd();
-            varm_menu_navigate(inputs);
-        }
-
-        if (gxm_interface.swap_buffers) {
-            gxm_interface.swap_buffers();
-        }
-
-        usleep(16666);
+    if (gxm_interface.clear_screen) {
+        gxm_interface.clear_screen(0.1f, 0.1f, 0.1f, 1.0f);
     }
 
+    if (g_varm_state == VARM_STATE_GAMEPLAY) {
+        varm_jit_execute_cycle();
+        varm_cheats_inject();
+    }
+
+    // This block catches the frame and fires our updated text/HUD statistics layout!
+    if (g_show_menu || g_varm_state == VARM_STATE_MENU_ACTIVE || g_varm_state == VARM_STATE_EDIT_TOUCH) {
+        varm_menu_render_osd(); // <-- Live stats are now processed inside here!
+        varm_menu_navigate(inputs);
+    }
+
+    if (gxm_interface.swap_buffers) {
+        gxm_interface.swap_buffers();
+    }
+
+    usleep(16666); // Hard 60Hz frame pacing sync
+}
+
     printf("\n[SYSTEM] Tearing down active runtime instances gracefully...\n");
+    varm_input_save_profile(); // Save touch profile persistently on exit
     if (gxm_interface.shutdown_display) {
         gxm_interface.shutdown_display();
     }
-    varm_jit_execute_cycle();
+
+    // Shut off audio lines smoothly to avoid loops or static cracks on exit
+    varm_audio_shutdown();
+
+    // Destroy graphics window and OpenGL ES context
+    varm_graphics_shutdown();
+
+    // 🛠️ FIX: Removed the hazardous trailing varm_jit_execute_cycle() here
+    // to prevent memory faults after hardware display teardown structures.
+
     hle_kernel_shutdown();
     printf("[SYSTEM] Teardown execution pipeline finalized clean.\n");
 
