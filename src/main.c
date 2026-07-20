@@ -98,6 +98,7 @@ while (g_running) {
     if (g_varm_state == VARM_STATE_GAMEPLAY) {
         varm_jit_execute_cycle();
         varm_cheats_inject();
+        varm_menu_draw_mock_game();
     }
 
     // This block catches the frame and fires our updated text/HUD statistics layout!

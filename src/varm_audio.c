@@ -27,7 +27,7 @@ void varm_audio_init(void) {
     desired_spec.freq     = 44100;     // Native Vita standard frequency playback rule
     desired_spec.format   = AUDIO_S16SYS; // 16-bit Signed PCM sample width
     desired_spec.channels = 2;          // Stereo audio layout
-    desired_spec.samples  = 1024;       // Low latency buffering execution size
+    desired_spec.samples  = 2048;       // 🛠️ INCREASED from 1024 to give JIT compilation headroom
     desired_spec.callback = NULL;       // Using queued pushing instead of manual polling threads
 
     s_audio_device = SDL_OpenAudioDevice(NULL, 0, &desired_spec, &obtained_spec, 0);
@@ -48,13 +48,27 @@ void varm_audio_init(void) {
 void varm_audio_push_samples(const int16_t* sample_buffer, uint32_t byte_size) {
     if (s_audio_device == 0 || !sample_buffer || byte_size == 0) return;
 
-    // 🛠️ THE FIX: Audio-Driven Execution Synchronization
-    // Throttle the execution thread if the audio buffer gets too full
-    while (SDL_GetQueuedAudioSize(s_audio_device) > 16384) {
+    // 🛠️ DEADLOCK PREVENTION:
+    // If ALSA fails due to an underrun, it stops draining.
+    // We limit our wait time to 5ms so we don't freeze the JIT thread and graphics pipeline.
+    int timeout_ms = 0;
+    while (SDL_GetQueuedAudioSize(s_audio_device) > 32768) {
         SDL_Delay(1);
+        timeout_ms++;
+        if (timeout_ms > 5) {
+            // Audio engine is stalled/dead. Clear the backlog and drop samples to keep rendering alive!
+            SDL_ClearQueuedAudio(s_audio_device);
+            break;
+        }
     }
 
-    SDL_QueueAudio(s_audio_device, sample_buffer, byte_size);
+    if (SDL_QueueAudio(s_audio_device, sample_buffer, byte_size) < 0) {
+        // Log failures non-intrusively to prevent terminal flooding
+        static uint32_t fail_count = 0;
+        if (fail_count++ % 100 == 0) {
+            printf("[AUDIO] SDL_QueueAudio error: %s\n", SDL_GetError());
+        }
+    }
 }
 
 /**

@@ -53,10 +53,10 @@ void varm_graphics_init(void) {
     if (!match_found) {
         s_scale_x = 1.0f;
         s_scale_y = 1.0f;
-        s_resolution_width = 960;
-        s_resolution_height = 544;
+        s_resolution_width = 640;
+        s_resolution_height = 480;
         s_target_fps = 60;
-        printf("[VITAGRAFIX-CORE] Running at full power: 1:1 Native Resolution Frame Buffers Activated (960x544 @ 60FPS).\n");
+        printf("[VITAGRAFIX-CORE] Running at RG35XXH Native Resolution Frame Buffers Activated (640x480 @ 60FPS).\n");
     }
 
     // Initialize SDL Video Subsystem
@@ -79,7 +79,7 @@ void varm_graphics_init(void) {
                                 SDL_WINDOWPOS_CENTERED,
                                 s_resolution_width,
                                 s_resolution_height,
-                                SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+                                SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_FULLSCREEN);
     if (!g_window) {
         printf("[GRAPHICS] ERROR: Failed to create SDL Window: %s\n", SDL_GetError());
         return;

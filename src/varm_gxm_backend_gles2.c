@@ -9,15 +9,15 @@
 #include "varm_gxp_shader.h" // 🔗 Links your dynamic translation function directly
 #include "varm_input.h"      // 🔗 Added to track the menu state
 
-extern _Bool g_show_menu; // Added to know when to render the visual overlay
+extern _Bool g_show_menu; // Added to know when to render the visual overlay[cite: 11]
 
-// Structural layout mirroring s_vertex_uniform_map inside the shader compiler
+// Structural layout mirroring s_vertex_uniform_map inside the shader compiler[cite: 11]
 typedef struct {
     uint16_t register_index;
     GLint gles_location;
 } UniformMapEntry;
 
-// Instantiated here so varm_gxp_shader_compiler_example.c can link successfully
+// Instantiated here so varm_gxp_shader_compiler_example.c can link successfully[cite: 11]
 UniformMapEntry s_vertex_uniform_map[64];
 int s_vertex_uniform_count = 0;
 
@@ -38,6 +38,16 @@ typedef struct {
 static TextureCacheEntry s_texture_cache[256];
 static int s_texture_cache_count = 0;
 
+// Struct layout mirroring the guest SceDisplayFrameBuf structure
+typedef struct {
+    uint32_t size;
+    uint32_t base;         // Guest virtual memory address of raw pixel layout
+    uint32_t pitch;
+    uint32_t pixelformat;
+    uint32_t width;
+    uint32_t height;
+} SceDisplayFrameBuf;
+
 static void swizzle_copy_abgr_to_rgba(uint32_t* dest, const uint32_t* src, uint32_t pixel_count) {
     for (uint32_t i = 0; i < pixel_count; i++) {
         uint32_t pixel = src[i];
@@ -57,33 +67,33 @@ V_GxmRendererInterface gxm_interface;
 
 static void* g_cached_egl_display = NULL;
 static void* g_cached_egl_surface = NULL;
-GLuint g_active_program           = 0; // Global exposure for compiler linking
+GLuint g_active_program           = 0; // Global exposure for compiler linking[cite: 11]
 
-// Core Function Pointers (Global Scope)
+// Core Function Pointers (Global Scope)[cite: 11]
 static void (*gl_draw_arrays_ptr)(GLenum mode, GLint first, GLsizei count) = NULL;
 static void (*gl_bind_texture_ptr)(GLenum target, GLuint texture) = NULL;
 static void (*gl_clear_color_ptr)(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha) = NULL;
 static void (*gl_clear_ptr)(GLbitfield mask) = NULL;
 static void (*gl_viewport_ptr)(GLint x, GLint y, GLsizei width, GLsizei height) = NULL;
 
-// Texture Management Function Pointers
+// Texture Management Function Pointers[cite: 11]
 void (*gl_gen_textures_ptr)(GLsizei n, GLuint* textures) = NULL;
 void (*gl_delete_textures_ptr)(GLsizei n, const GLuint* textures) = NULL;
 void (*gl_tex_image_2d_ptr)(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels) = NULL;
 void (*gl_tex_parameter_i_ptr)(GLenum target, GLenum pname, GLint param) = NULL;
 void (*gl_active_texture_ptr)(GLenum texture) = NULL;
 
-// Vertex Attribute Function Pointers
+// Vertex Attribute Function Pointers[cite: 11]
 static void (*gl_vertex_attrib_pointer_ptr)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer) = NULL;
 static void (*gl_enable_vertex_attrib_array_ptr)(GLuint index) = NULL;
 static void (*gl_disable_vertex_attrib_array_ptr)(GLuint index) = NULL;
 static void (*gl_bind_attrib_location_ptr)(GLuint program, GLuint index, const GLchar* name) = NULL;
 
-// Uniform Management Function Pointers
+// Uniform Management Function Pointers[cite: 11]
 static void (*gl_uniform_4fv_ptr)(GLint location, GLsizei count, const GLfloat* value) = NULL;
 GLint (*gl_get_uniform_location_ptr)(GLuint program, const GLchar* name) = NULL;
 
-// Shader Core Function Pointers
+// Shader Core Function Pointers[cite: 11]
 GLuint (*gl_create_shader_ptr)(GLenum type) = NULL;
 void   (*gl_shader_source_ptr)(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length) = NULL;
 void   (*gl_compile_shader_ptr)(GLuint shader) = NULL;
@@ -96,9 +106,140 @@ void   (*gl_use_program_ptr)(GLuint program) = NULL;
 void   (*gl_delete_program_ptr)(GLuint program) = NULL;
 void   (*gl_delete_shader_ptr)(GLuint shader) = NULL;
 
+// Additional dynamically resolved calls for the Blitter Engine
+static void (*gl_bind_framebuffer_ptr)(GLenum target, GLuint framebuffer) = NULL;
+static void (*gl_uniform_1i_ptr)(GLint location, GLint v0) = NULL;
+
 static void* (*egl_get_current_display_ptr)(void) = NULL;
 static void* (*egl_get_current_surface_ptr)(int reftype) = NULL;
 static int (*egl_swap_buffers_ptr)(void* dpy, void* surface) = NULL;
+
+// ========================================================================
+// 🛠️ DYNAMIC BLITTER ENGINE (GLES2 Dynamic Call Compliant)
+// ========================================================================
+
+static GLuint s_blit_program = 0;
+static GLuint s_fallback_texture = 0;
+
+static void init_blit_shader(void) {
+    if (s_blit_program != 0) return;
+    if (!gl_create_shader_ptr || !gl_shader_source_ptr || !gl_compile_shader_ptr ||
+        !gl_create_program_ptr || !gl_attach_shader_ptr || !gl_bind_attrib_location_ptr ||
+        !gl_link_program_ptr || !gl_delete_shader_ptr) {
+        return;
+    }
+
+    const char* v_src =
+        "attribute vec2 position;\n"
+        "attribute vec2 texcoord;\n"
+        "varying vec2 v_texcoord;\n"
+        "void main() {\n"
+        "   gl_Position = vec4(position, 0.0, 1.0);\n"
+        "   v_texcoord = texcoord;\n"
+        "}\n";
+
+    const char* f_src =
+        "precision mediump float;\n"
+        "varying vec2 v_texcoord;\n"
+        "uniform sampler2D u_texture;\n"
+        "void main() {\n"
+        "   gl_FragColor = texture2D(u_texture, v_texcoord);\n"
+        "}\n";
+
+    GLuint vs = gl_create_shader_ptr(GL_VERTEX_SHADER);
+    gl_shader_source_ptr(vs, 1, &v_src, NULL);
+    gl_compile_shader_ptr(vs);
+
+    GLuint fs = gl_create_shader_ptr(GL_FRAGMENT_SHADER);
+    gl_shader_source_ptr(fs, 1, &f_src, NULL);
+    gl_compile_shader_ptr(fs);
+
+    s_blit_program = gl_create_program_ptr();
+    gl_attach_shader_ptr(s_blit_program, vs);
+    gl_attach_shader_ptr(s_blit_program, fs);
+    gl_bind_attrib_location_ptr(s_blit_program, 0, "position");
+    gl_bind_attrib_location_ptr(s_blit_program, 1, "texcoord");
+    gl_link_program_ptr(s_blit_program);
+
+    gl_delete_shader_ptr(vs);
+    gl_delete_shader_ptr(fs);
+}
+
+static void blit_texture_to_screen(GLuint tex_id) {
+    init_blit_shader();
+
+    if (s_blit_program == 0) return;
+    if (!gl_use_program_ptr || !gl_viewport_ptr || !gl_active_texture_ptr ||
+        !gl_bind_texture_ptr || !gl_get_uniform_location_ptr ||
+        !gl_vertex_attrib_pointer_ptr || !gl_enable_vertex_attrib_array_ptr ||
+        !gl_draw_arrays_ptr || !gl_disable_vertex_attrib_array_ptr) {
+        return;
+    }
+
+    gl_use_program_ptr(s_blit_program);
+    if (gl_bind_framebuffer_ptr) {
+        gl_bind_framebuffer_ptr(GL_FRAMEBUFFER, 0); // Target standard screen backbuffer
+    }
+    gl_viewport_ptr(0, 0, 960, 544); // Force native Vita scale context mapping
+
+    // Fullscreen quad vertices (Y inverted to correct Vita-to-GL coordinate mapping)
+    GLfloat vertices[] = {
+        -1.0f,  1.0f,  0.0f, 0.0f, // Top-Left
+        -1.0f, -1.0f,  0.0f, 1.0f, // Bottom-Left
+         1.0f, -1.0f,  1.0f, 1.0f, // Bottom-Right
+
+        -1.0f,  1.0f,  0.0f, 0.0f, // Top-Left
+         1.0f, -1.0f,  1.0f, 1.0f, // Bottom-Right
+         1.0f,  1.0f,  1.0f, 0.0f  // Top-Right
+    };
+
+    gl_active_texture_ptr(GL_TEXTURE0);
+    gl_bind_texture_ptr(GL_TEXTURE_2D, tex_id);
+
+    GLint u_tex = gl_get_uniform_location_ptr(s_blit_program, "u_texture");
+    if (u_tex != -1 && gl_uniform_1i_ptr) {
+        gl_uniform_1i_ptr(u_tex, 0);
+    }
+
+    gl_vertex_attrib_pointer_ptr(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), vertices);
+    gl_enable_vertex_attrib_array_ptr(0);
+    gl_vertex_attrib_pointer_ptr(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), &vertices[2]);
+    gl_enable_vertex_attrib_array_ptr(1);
+
+    gl_draw_arrays_ptr(GL_TRIANGLES, 0, 6);
+
+    gl_disable_vertex_attrib_array_ptr(0);
+    gl_disable_vertex_attrib_array_ptr(1);
+    gl_use_program_ptr(0);
+}
+
+static GLuint get_or_create_fallback_texture(void *pixels, int width, int height) {
+    if (!gl_gen_textures_ptr || !gl_bind_texture_ptr || !gl_tex_parameter_i_ptr || !gl_tex_image_2d_ptr) return 0;
+
+    if (s_fallback_texture == 0) {
+        gl_gen_textures_ptr(1, &s_fallback_texture);
+        gl_bind_texture_ptr(GL_TEXTURE_2D, s_fallback_texture);
+        gl_tex_parameter_i_ptr(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        gl_tex_parameter_i_ptr(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        gl_tex_parameter_i_ptr(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        gl_tex_parameter_i_ptr(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+
+    gl_bind_texture_ptr(GL_TEXTURE_2D, s_fallback_texture);
+
+    // Dynamic swizzle from guest ABGR to standard GLES RGBA on the fly
+    uint32_t *swizzled = malloc(width * height * sizeof(uint32_t));
+    if (swizzled) {
+        swizzle_copy_abgr_to_rgba(swizzled, (const uint32_t*)pixels, width * height);
+        gl_tex_image_2d_ptr(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, swizzled);
+        free(swizzled);
+    }
+    return s_fallback_texture;
+}
+
+// ========================================================================
+// 🛠️ SHADER TRANSLATION COMPILER PIPELINES
+// ========================================================================
 
 static GLuint compile_shader_source(GLenum type, const char* source) {
     if (!gl_create_shader_ptr) return 0;
@@ -118,9 +259,6 @@ static GLuint compile_shader_source(GLenum type, const char* source) {
     return shader;
 }
 
-/**
- * 🛠️ UPDATED: Now generates GLSL live via the real GXP translation engine!
- */
 static void generate_glsl_from_gxp(uint32_t vshader_vaddr, uint32_t fshader_vaddr) {
     if (!gl_create_program_ptr) return;
 
@@ -159,9 +297,6 @@ static void generate_glsl_from_gxp(uint32_t vshader_vaddr, uint32_t fshader_vadd
     free(f_src);
 }
 
-/**
- * 🛠️ UPDATED: Passes virtual memory addresses directly down to the translator engine
- */
 static void gles_bind_program(uint32_t vshader_vaddr, uint32_t fshader_vaddr) {
     if (vshader_vaddr == 0 || fshader_vaddr == 0) return;
 
@@ -181,6 +316,10 @@ static void gles_set_uniforms(uint32_t buffer_vaddr, uint32_t size) {
         gl_uniform_4fv_ptr(loc, size / 16, (const GLfloat*)raw_uniforms);
     }
 }
+
+// ========================================================================
+// 🛠️ SYSTEM GRAPHICS INTERFACE & CONTEXTS
+// ========================================================================
 
 static int gles_init_display(void) {
     void* gles_handle = dlopen("libGLESv2.so", RTLD_LAZY);
@@ -222,6 +361,10 @@ static int gles_init_display(void) {
     gl_use_program_ptr = dlsym(gles_handle, "glUseProgram");
     gl_delete_program_ptr = dlsym(gles_handle, "glDeleteProgram");
     gl_delete_shader_ptr = dlsym(gles_handle, "glDeleteShader");
+
+    // Resolvers for blitting
+    gl_bind_framebuffer_ptr = dlsym(gles_handle, "glBindFramebuffer");
+    gl_uniform_1i_ptr = dlsym(gles_handle, "glUniform1i");
 
     egl_get_current_display_ptr = dlsym(egl_handle, "eglGetCurrentDisplay");
     egl_get_current_surface_ptr = dlsym(egl_handle, "eglGetCurrentSurface");
@@ -340,7 +483,17 @@ static int gles_swap_buffers(void) {
 }
 
 static void gles_shutdown_display(void) {
-    if (g_active_program > 0 && gl_delete_program_ptr) gl_delete_program_ptr(g_active_program);
+    if (g_active_program > 0 && gl_delete_program_ptr) {
+        gl_delete_program_ptr(g_active_program);
+    }
+    if (s_blit_program > 0 && gl_delete_program_ptr) {
+        gl_delete_program_ptr(s_blit_program);
+        s_blit_program = 0;
+    }
+    if (s_fallback_texture > 0 && gl_delete_textures_ptr) {
+        gl_delete_textures_ptr(1, &s_fallback_texture);
+        s_fallback_texture = 0;
+    }
     if (gl_delete_textures_ptr) {
         for (int i = 0; i < s_texture_cache_count; i++) {
             gl_delete_textures_ptr(1, &s_texture_cache[i].gles_tex_id);
@@ -370,21 +523,37 @@ int varm_gxm_init_renderer(V_RenderCoreType core_type, V_GxmRendererInterface *i
 
 /**
  * 🛠️ THE FIX: varm_display_set_framebuf
- * HLE hook intercepted when the game binary requests to flip the display buffer.
+ * HLE hook intercepted when the game binary requests to flip the display buffer.[cite: 11]
  */
 int varm_display_set_framebuf(uint32_t pParam_vaddr, int sync) {
+    if (pParam_vaddr == 0) return -1;
 
-    // 1. Draw the Visual Text OSD Overlay on top of the rendered frame BEFORE swapping
-    if (g_show_menu) {
-        // Call your varm_menu.c overlay rendering function here
-        // Example: varm_menu_render_overlay();
+    // 1. Resolve guest virtual struct address into host space
+    SceDisplayFrameBuf *pParam = (SceDisplayFrameBuf *)hle_kernel_resolve_address(pParam_vaddr, 1);
+    if (!pParam || pParam->base == 0) return -1;
+
+    GLuint tex_id = 0;
+
+    // 2. Scan texture cache to locate GLES handle mapped to this guest address space
+    for (int i = 0; i < s_texture_cache_count; i++) {
+        if (s_texture_cache[i].guest_vaddr == pParam->base) {
+            tex_id = s_texture_cache[i].gles_tex_id;
+            break;
+        }
     }
 
-    // 2. Physically present the rendered OpenGLES buffer to the host display!
-    // This breaks the black screen and finally shows your graphics.
-    if (gxm_interface.swap_buffers) {
-        gxm_interface.swap_buffers();
+    // 3. Fallback: If not in cache (CPU/software rendering), resolve direct RAM pointer and upload on the fly
+    if (tex_id == 0) {
+        void *host_pixels = hle_kernel_resolve_address(pParam->base, 1);
+        if (host_pixels) {
+            tex_id = get_or_create_fallback_texture(host_pixels, pParam->width, pParam->height);
+        }
     }
 
-    return 0;
+    // 4. Blit the game frame to the host's backbuffer!
+    if (tex_id > 0) {
+        blit_texture_to_screen(tex_id);
+    }
+
+    return 0; // Let main.c render overlays and swap normally!
 }

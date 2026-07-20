@@ -76,9 +76,9 @@ int varm_loader_load_binary(const char* file_path) {
     printf("[LOADER] Opening target executable frame: %s\n", file_path);
 
     // Extract the Game Title/Folder ID from the launch path
-    const char* game_dir_start = strstr(file_path, "games/");
+    const char* game_dir_start = strstr(file_path, "ux0/app/");
     if (game_dir_start) {
-        game_dir_start += 6;
+        game_dir_start += 8;
         const char* game_dir_end = strchr(game_dir_start, '/');
         if (game_dir_end) {
             size_t id_length = game_dir_end - game_dir_start;
